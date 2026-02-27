@@ -27,8 +27,11 @@ if not User.objects.filter(email='demo@ecompro.com').exists():
         FinancialTransaction.objects.create(organization=org, order_item_ref=item, transaction_type=FinancialTransactionType.PRODUCT_COST, amount=Decimal("40"), occurred_at=now)
         FinancialTransaction.objects.create(organization=org, order_item_ref=item, transaction_type=FinancialTransactionType.COMMISSION, amount=Decimal("22.5"), occurred_at=now)
         FinancialTransaction.objects.create(organization=org, order_item_ref=item, transaction_type=FinancialTransactionType.SHIPPING_FEE, amount=Decimal("15"), occurred_at=now)
+        FinancialTransaction.objects.create(organization=org, order_item_ref=item, transaction_type=FinancialTransactionType.VAT_OUTPUT, amount=Decimal("25"), occurred_at=now)
         if i % 3 == 0:
             FinancialTransaction.objects.create(organization=org, order_item_ref=item, transaction_type=FinancialTransactionType.RETURN_LOSS, amount=Decimal("12"), occurred_at=now)
+        if i % 2 == 0:
+            FinancialTransaction.objects.create(organization=org, order_item_ref=item, transaction_type=FinancialTransactionType.ADS_COST, amount=Decimal("5"), occurred_at=now)
 
     # Micro orders
     countries = ["AZ", "AE", "SA", "RO", "BG"]

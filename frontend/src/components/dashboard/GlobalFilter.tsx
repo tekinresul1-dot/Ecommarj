@@ -1,9 +1,25 @@
 "use client";
 
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { useCallback, useState, useEffect } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import clsx from "clsx";
-import { Calendar, Globe } from "lucide-react";
+import { Calendar, Globe, ChevronDown, Check } from "lucide-react";
+
+const MICRO_COUNTRIES = [
+    { code: "TR", name: "Türkiye" },
+    { code: "SA", name: "Suudi Arabistan" },
+    { code: "AE", name: "Birleşik Arap Emirlikleri" },
+    { code: "QA", name: "Katar" },
+    { code: "KW", name: "Kuveyt" },
+    { code: "OM", name: "Umman" },
+    { code: "BH", name: "Bahreyn" },
+    { code: "AZ", name: "Azerbaycan" },
+    { code: "RO", name: "Romanya" },
+    { code: "GR", name: "Yunanistan" },
+    { code: "BG", name: "Bulgaristan" },
+    { code: "UA", name: "Ukrayna" },
+    { code: "MD", name: "Moldova" },
+];
 
 export function GlobalFilter() {
     const router = useRouter();
@@ -13,11 +29,23 @@ export function GlobalFilter() {
     const channel = searchParams.get("channel") || "trendyol";
 
     const [countries, setCountries] = useState<string[]>([]);
+    const [countryDropdownOpen, setCountryDropdownOpen] = useState(false);
+    const dropdownRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         const c = searchParams.get("countries");
         setCountries(c ? c.split(",") : []);
     }, [searchParams]);
+
+    useEffect(() => {
+        function handleClickOutside(event: MouseEvent) {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+                setCountryDropdownOpen(false);
+            }
+        }
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+    }, []);
 
     const createQueryString = useCallback(
         (name: string, value: string) => {
@@ -43,9 +71,21 @@ export function GlobalFilter() {
     };
 
     const toggleCountry = (code: string) => {
-        const newC = countries.includes(code) ? countries.filter(c => c !== code) : [...countries, code];
-        router.push(pathname + "?" + createQueryString("countries", newC.join(",")));
+        let newC = [...countries];
+        if (code === "ALL") {
+            newC = newC.length === MICRO_COUNTRIES.length ? [] : MICRO_COUNTRIES.map(c => c.code);
+        } else {
+            newC = newC.includes(code) ? newC.filter(c => c !== code) : [...newC, code];
+        }
+        setCountries(newC);
     };
+
+    const applyCountryFilter = () => {
+        setCountryDropdownOpen(false);
+        router.push(pathname + "?" + createQueryString("countries", countries.join(",")));
+    };
+
+    const isAllSelected = countries.length === MICRO_COUNTRIES.length && MICRO_COUNTRIES.length > 0;
 
     return (
         <div className="bg-navy-900 border border-white/10 rounded-2xl p-4 mb-6 flex flex-col xl:flex-row items-start xl:items-center gap-4 justify-between shadow-lg">
@@ -74,34 +114,74 @@ export function GlobalFilter() {
                 </button>
             </div>
 
-            <div className="flex flex-wrap gap-4 items-center w-full xl:w-auto">
+            <div className="flex flex-wrap gap-4 items-center w-full xl:w-auto justify-end">
                 {channel === "micro_export" && (
-                    <div className="flex items-center gap-3 bg-navy-950 border border-white/10 rounded-xl px-4 py-1.5 h-11 w-full sm:w-auto">
-                        <Globe className="w-4 h-4 text-white/40" />
-                        <div className="flex gap-4 items-center overflow-x-auto scrollbar-hide py-1">
-                            {["AZ", "AE", "SA", "RO", "BG"].map(code => (
-                                <label key={code} className="flex items-center gap-2 cursor-pointer text-sm font-medium text-white/80 hover:text-white whitespace-nowrap">
-                                    <input
-                                        type="checkbox"
-                                        className="rounded border-white/20 bg-navy-900 text-purple-500 focus:ring-purple-500/50 h-4 w-4 transition-colors cursor-pointer"
-                                        checked={countries.includes(code)}
-                                        onChange={() => toggleCountry(code)}
-                                    />
-                                    {code}
-                                </label>
-                            ))}
-                        </div>
+                    <div className="relative" ref={dropdownRef}>
+                        <button
+                            onClick={() => setCountryDropdownOpen(!countryDropdownOpen)}
+                            className={clsx(
+                                "flex items-center gap-3 bg-navy-950 border rounded-xl px-4 py-1.5 h-11 w-full sm:w-auto transition-colors",
+                                countryDropdownOpen ? "border-purple-500/50 text-white" : "border-white/10 text-white/70 hover:text-white hover:border-white/20"
+                            )}
+                        >
+                            <Globe className="w-4 h-4 text-purple-400" />
+                            <span className="text-sm font-medium">
+                                {countries.length === 0 ? "Ülke Seçin" : countries.length === MICRO_COUNTRIES.length ? "Tüm Ülkeler" : `${countries.length} Ülke Seçili`}
+                            </span>
+                            <ChevronDown className={clsx("w-4 h-4 transition-transform", countryDropdownOpen && "rotate-180")} />
+                        </button>
+
+                        {countryDropdownOpen && (
+                            <div className="absolute right-0 top-full mt-2 w-72 bg-navy-900 border border-white/10 rounded-xl shadow-2xl z-50 overflow-hidden flex flex-col max-h-[400px]">
+                                <div className="p-3 border-b border-white/10 bg-navy-950/50">
+                                    <label className="flex items-center gap-3 cursor-pointer group">
+                                        <div className={clsx("w-5 h-5 rounded border flex items-center justify-center transition-colors", isAllSelected ? "bg-purple-600 border-purple-500" : "border-white/20 bg-navy-950 group-hover:border-white/40")}>
+                                            {isAllSelected && <Check className="w-3.5 h-3.5 text-white" />}
+                                        </div>
+                                        <span className="text-sm font-medium text-white">Tümünü Seç</span>
+                                    </label>
+                                    <button onClick={() => toggleCountry("ALL")} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                                </div>
+
+                                <div className="overflow-y-auto flex-1 p-2 scrollbar-thin scrollbar-thumb-white/10">
+                                    {MICRO_COUNTRIES.map((c) => {
+                                        const isSelected = countries.includes(c.code);
+                                        return (
+                                            <label key={c.code} className="flex items-center justify-between p-2 rounded-lg hover:bg-white/5 cursor-pointer group transition-colors">
+                                                <div className="flex items-center gap-3">
+                                                    <div className={clsx("w-5 h-5 rounded border flex items-center justify-center transition-colors", isSelected ? "bg-purple-600 border-purple-500" : "border-white/20 bg-navy-950 group-hover:border-white/40")}>
+                                                        {isSelected && <Check className="w-3.5 h-3.5 text-white" />}
+                                                    </div>
+                                                    <span className={clsx("text-sm transition-colors", isSelected ? "text-white font-medium" : "text-white/70 group-hover:text-white")}>{c.name}</span>
+                                                </div>
+                                                <span className={`fi fi-${c.code.toLowerCase()} rounded-[2px] shadow-sm text-lg w-6 shrink-0`}></span>
+                                                <input type="checkbox" className="hidden" checked={isSelected} onChange={() => toggleCountry(c.code)} />
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+
+                                <div className="p-3 border-t border-white/10 bg-navy-950/80 mt-auto">
+                                    <button
+                                        onClick={applyCountryFilter}
+                                        className="w-full bg-purple-600 hover:bg-purple-500 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors"
+                                    >
+                                        Filtrele
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
-                <div className="flex items-center gap-3 bg-navy-950 border border-white/10 rounded-xl px-4 h-11 w-full sm:w-auto">
-                    <Calendar className="w-4 h-4 text-white/40" />
-                    <select className="bg-transparent text-white font-medium text-sm outline-none focus:ring-0 cursor-pointer appearance-none pr-8 w-full h-full">
+                <div className="flex items-center gap-3 bg-navy-950 border border-white/10 rounded-xl px-4 h-11 w-full sm:w-auto hover:border-white/20 transition-colors cursor-pointer group">
+                    <Calendar className="w-4 h-4 text-blue-400" />
+                    <select className="bg-transparent text-white/90 group-hover:text-white font-medium text-sm outline-none focus:ring-0 cursor-pointer appearance-none pr-8 w-full h-full">
                         <option value="today" className="bg-navy-900">Bugün</option>
                         <option value="7days" className="bg-navy-900">Son 7 Gün</option>
                         <option value="30days" className="bg-navy-900">Son 30 Gün</option>
                         <option value="this_month" className="bg-navy-900">Bu Ay</option>
                         <option value="last_month" className="bg-navy-900">Geçen Ay</option>
-                        <option value="all_time" className="bg-navy-900">Tüm Zamanlar</option>
+                        <option value="all_time" className="bg-navy-900 shadow-xl">Tarih Aralığı Seç</option>
                     </select>
                 </div>
             </div>

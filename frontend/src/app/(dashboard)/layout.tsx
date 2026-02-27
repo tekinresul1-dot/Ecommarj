@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Sidebar } from "@/components/dashboard/Sidebar";
 import { Topbar } from "@/components/dashboard/Topbar";
+import "flag-icons/css/flag-icons.min.css";
 
 export default function DashboardLayout({
     children,

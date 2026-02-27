@@ -1,0 +1,3 @@
+"""
+core app – package init.
+"""

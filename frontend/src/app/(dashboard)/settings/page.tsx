@@ -94,7 +94,7 @@ export default function SettingsPage() {
           </CardDescription>
         </CardHeader>
 
-        <form onSubmit={handleSave}>
+        <form onSubmit={handleSave} autoComplete="off">
           <CardContent className="space-y-6">
 
             <div className="space-y-2">
@@ -105,10 +105,12 @@ export default function SettingsPage() {
                 </div>
                 <Input
                   id="sellerId"
+                  name="sellerId_noautocomplete"
                   value={sellerId}
                   onChange={(e) => setSellerId(e.target.value)}
                   placeholder="Örn: 123456"
                   className="pl-10 bg-slate-950 border-slate-800 focus-visible:ring-emerald-500 text-slate-200"
+                  autoComplete="off"
                   required
                 />
               </div>
@@ -123,10 +125,13 @@ export default function SettingsPage() {
                 </div>
                 <Input
                   id="apiKey"
+                  name="apiKey_noautocomplete"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder="K89KKC..."
                   className="pl-10 bg-slate-950 border-slate-800 focus-visible:ring-emerald-500 text-slate-200 font-mono"
+                  autoComplete="off"
+                  data-1p-ignore
                 />
               </div>
             </div>
@@ -139,11 +144,14 @@ export default function SettingsPage() {
                 </div>
                 <Input
                   id="apiSecret"
+                  name="apiSecret_noautocomplete"
                   type="password"
                   value={apiSecret}
                   onChange={(e) => setApiSecret(e.target.value)}
                   placeholder="••••••••••••••••"
                   className="pl-10 bg-slate-950 border-slate-800 focus-visible:ring-emerald-500 text-slate-200 font-mono"
+                  autoComplete="new-password"
+                  data-1p-ignore
                 />
               </div>
             </div>

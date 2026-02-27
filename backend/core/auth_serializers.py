@@ -41,11 +41,15 @@ class RegisterSerializer(serializers.Serializer):
             last_name=last_name,
         )
 
-        # Create profile with optional fields
-        from core.models import UserProfile
+        from core.models import UserProfile, Organization
+
+        # Create tenant (Organization)
+        company_name = validated_data.get("company") or f"{first_name} {last_name} Firması".strip()
+        org = Organization.objects.create(name=company_name)
 
         UserProfile.objects.create(
             user=user,
+            organization=org,
             phone=validated_data.get("phone", ""),
             company=validated_data.get("company", ""),
         )

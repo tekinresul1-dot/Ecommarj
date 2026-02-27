@@ -1,164 +1,95 @@
 """
-Django Admin registrations for all core models.
+Django admin definitions for Ecompro core models.
 """
 
 from django.contrib import admin
 from .models import (
-    TrendyolIntegration,
+    Organization,
+    UserProfile,
+    MarketplaceAccount,
     Product,
     ProductVariant,
     Order,
     OrderItem,
-    Return,
-    Expense,
+    FinancialTransaction,
+    CostRule,
+    ExchangeRate,
+    ProfitSnapshot,
     SyncJob,
 )
 
 
-# ---------------------------------------------------------------------------
-# Trendyol Integration
-# ---------------------------------------------------------------------------
-
-@admin.register(TrendyolIntegration)
-class TrendyolIntegrationAdmin(admin.ModelAdmin):
-    list_display = ("store_name", "supplier_id", "user", "status", "last_sync_at", "created_at")
-    list_filter = ("status",)
-    search_fields = ("store_name", "supplier_id")
-    readonly_fields = ("created_at", "updated_at")
+@admin.register(Organization)
+class OrganizationAdmin(admin.ModelAdmin):
+    list_display = ("name", "created_at")
+    search_fields = ("name",)
 
 
-# ---------------------------------------------------------------------------
-# Product
-# ---------------------------------------------------------------------------
+@admin.register(UserProfile)
+class UserProfileAdmin(admin.ModelAdmin):
+    list_display = ("user", "organization", "phone", "company")
+    search_fields = ("user__email", "user__first_name", "user__last_name", "company")
+
+
+@admin.register(MarketplaceAccount)
+class MarketplaceAccountAdmin(admin.ModelAdmin):
+    list_display = ("store_name", "organization", "channel", "seller_id", "is_active", "last_sync_at")
+    list_filter = ("channel", "is_active", "organization")
+    search_fields = ("store_name", "seller_id")
+
 
 class ProductVariantInline(admin.TabularInline):
     model = ProductVariant
     extra = 0
-    fields = ("barcode", "sku", "size", "color", "sale_price", "list_price", "quantity")
 
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = (
-        "title_short", "barcode", "sale_price", "cost_price",
-        "commission_rate", "quantity", "is_active",
-    )
-    list_filter = ("is_active", "integration")
-    search_fields = ("title", "barcode", "product_code", "trendyol_id")
-    readonly_fields = ("created_at", "updated_at")
+    list_display = ("title", "marketplace_sku", "organization", "marketplace_account", "is_active")
+    list_filter = ("is_active", "organization")
+    search_fields = ("title", "marketplace_sku", "barcode")
     inlines = [ProductVariantInline]
 
-    @admin.display(description="Ürün Adı")
-    def title_short(self, obj):
-        return obj.title[:80] if obj.title else "–"
-
-
-# ---------------------------------------------------------------------------
-# Product Variant (standalone)
-# ---------------------------------------------------------------------------
-
-@admin.register(ProductVariant)
-class ProductVariantAdmin(admin.ModelAdmin):
-    list_display = ("barcode", "product", "size", "color", "sale_price", "quantity")
-    search_fields = ("barcode", "sku")
-    readonly_fields = ("created_at", "updated_at")
-
-
-# ---------------------------------------------------------------------------
-# Order
-# ---------------------------------------------------------------------------
 
 class OrderItemInline(admin.TabularInline):
     model = OrderItem
     extra = 0
-    fields = (
-        "barcode", "product_name", "quantity", "sale_price",
-        "commission_amount", "cargo_cost", "net_profit",
-    )
-    readonly_fields = ("net_profit",)
 
 
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    list_display = (
-        "order_number", "status", "order_date", "total_price",
-        "total_commission", "cargo_cost", "net_profit", "profit_margin",
-    )
-    list_filter = ("status", "integration")
-    search_fields = ("order_number", "trendyol_order_id")
-    readonly_fields = ("created_at", "updated_at")
+    list_display = ("marketplace_order_id", "organization", "channel", "order_date", "status")
+    list_filter = ("status", "channel", "organization")
+    search_fields = ("marketplace_order_id",)
     inlines = [OrderItemInline]
-    date_hierarchy = "order_date"
 
 
-# ---------------------------------------------------------------------------
-# Order Item (standalone)
-# ---------------------------------------------------------------------------
-
-@admin.register(OrderItem)
-class OrderItemAdmin(admin.ModelAdmin):
-    list_display = (
-        "product_name_short", "barcode", "quantity", "sale_price",
-        "commission_amount", "net_profit",
-    )
-    search_fields = ("barcode", "product_name")
-    readonly_fields = ("created_at", "updated_at")
-
-    @admin.display(description="Ürün")
-    def product_name_short(self, obj):
-        return obj.product_name[:60] if obj.product_name else "–"
+@admin.register(FinancialTransaction)
+class FinancialTransactionAdmin(admin.ModelAdmin):
+    list_display = ("transaction_type", "amount", "currency", "organization", "occurred_at")
+    list_filter = ("transaction_type", "currency", "organization")
 
 
-# ---------------------------------------------------------------------------
-# Return
-# ---------------------------------------------------------------------------
-
-@admin.register(Return)
-class ReturnAdmin(admin.ModelAdmin):
-    list_display = (
-        "trendyol_return_id", "product_name_short", "quantity",
-        "refund_amount", "status", "return_date",
-    )
-    list_filter = ("status", "integration")
-    search_fields = ("trendyol_return_id", "barcode", "product_name")
-    readonly_fields = ("created_at", "updated_at")
-
-    @admin.display(description="Ürün")
-    def product_name_short(self, obj):
-        return obj.product_name[:60] if obj.product_name else "–"
+@admin.register(CostRule)
+class CostRuleAdmin(admin.ModelAdmin):
+    list_display = ("organization", "packaging_cost", "handling_cost", "extra_fees")
 
 
-# ---------------------------------------------------------------------------
-# Expense
-# ---------------------------------------------------------------------------
-
-@admin.register(Expense)
-class ExpenseAdmin(admin.ModelAdmin):
-    list_display = ("title", "category", "amount", "date", "is_recurring")
-    list_filter = ("category", "is_recurring", "integration")
-    search_fields = ("title",)
-    readonly_fields = ("created_at", "updated_at")
+@admin.register(ExchangeRate)
+class ExchangeRateAdmin(admin.ModelAdmin):
+    list_display = ("date", "from_currency", "to_currency", "rate")
+    list_filter = ("from_currency", "to_currency")
     date_hierarchy = "date"
 
 
-# ---------------------------------------------------------------------------
-# Sync Job
-# ---------------------------------------------------------------------------
+@admin.register(ProfitSnapshot)
+class ProfitSnapshotAdmin(admin.ModelAdmin):
+    list_display = ("date", "organization", "channel", "profit_amount", "profit_margin")
+    list_filter = ("channel", "organization")
+    date_hierarchy = "date"
+
 
 @admin.register(SyncJob)
 class SyncJobAdmin(admin.ModelAdmin):
-    list_display = (
-        "job_type", "status", "records_processed",
-        "started_at", "finished_at", "integration",
-    )
-    list_filter = ("job_type", "status", "integration")
-    readonly_fields = ("created_at", "updated_at")
-
-
-# ---------------------------------------------------------------------------
-# Admin site customisation
-# ---------------------------------------------------------------------------
-
-admin.site.site_header = "Ecompro Yönetim Paneli"
-admin.site.site_title = "Ecompro Admin"
-admin.site.index_title = "Kontrol Paneli"
+    list_display = ("job_type", "status", "organization", "marketplace_account", "started_at")
+    list_filter = ("job_type", "status")

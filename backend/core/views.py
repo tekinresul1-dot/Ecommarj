@@ -235,3 +235,109 @@ class MockReportsView(APIView):
             "report_type": report_type,
             "data": []
         })
+
+
+class SettingsTrendyolAPIView(APIView):
+    """
+    Kullanıcının Trendyol API Key, Secret ve Satıcı ID'sini kaydettiği veya çektiği endpoint.
+    POST atıldıktan sonra (güncellenirse) otomatik senkronizasyon tetiklenebilir.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        org = getattr(user.profile, 'organization', None)
+
+        if not org:
+            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+            
+        account = MarketplaceAccount.objects.filter(
+            organization=org, 
+            channel=MarketplaceAccount.Channel.TRENDYOL
+        ).first()
+
+        if not account:
+            return Response({
+                "api_key": "",
+                "api_secret": "",
+                "seller_id": ""
+            })
+
+        return Response({
+            "api_key": account.api_key,
+            "api_secret": account.api_secret, 
+            "seller_id": account.seller_id
+        })
+
+    def post(self, request):
+        user = request.user
+        org = getattr(user.profile, 'organization', None)
+
+        if not org:
+            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+
+        api_key = request.data.get("api_key", "").strip()
+        api_secret = request.data.get("api_secret", "").strip()
+        seller_id = request.data.get("seller_id", "").strip()
+
+        if not seller_id:
+            return Response({"error": "Satıcı ID (Seller ID) zorunludur."}, status=400)
+
+        # Update or create account for this organization
+        account, created = MarketplaceAccount.objects.update_or_create(
+            organization=org,
+            channel=MarketplaceAccount.Channel.TRENDYOL,
+            defaults={
+                "store_name": f"Trendyol Store - {seller_id}",
+                "seller_id": seller_id,
+                "api_key": api_key,
+                "api_secret": api_secret,
+                "is_active": True
+            }
+        )
+
+        # Trigger auto-sync if requested
+        auto_sync = request.data.get("auto_sync", True)
+        if auto_sync and account.api_key and account.api_secret:
+            sync_all_trendyol_data_task.delay(str(account.id))
+
+        return Response({"message": "Trendyol API bilgileri başarıyla kaydedildi.", "sync_started": auto_sync})
+
+
+class ProductListView(APIView):
+    """
+    GET /api/products/
+    Veritabanına (Trendyol üzerinden) senkronize edilmiş ürünlerin tablo olarak dökümünü sağlar.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        org = getattr(user.profile, 'organization', None)
+
+        if not org:
+            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+
+        from core.models import Product
+        
+        products = Product.objects.filter(organization=org).order_by('-created_at')
+        
+        # Simple serialization
+        data = []
+        for p in products:
+            data.append({
+                "id": p.id,
+                "title": p.title,
+                "barcode": p.barcode,
+                "marketplace_sku": p.marketplace_sku,
+                "sale_price": str(p.sale_price),
+                "vat_rate": str(p.vat_rate),
+                "commission_rate": str(p.commission_rate),
+                "image_url": p.image_url,
+                "is_active": p.is_active
+            })
+
+        return Response({
+            "count": len(data),
+            "results": data
+        })

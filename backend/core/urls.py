@@ -1,6 +1,6 @@
 from django.urls import path
 from .auth_views import RegisterView, LoginView, MeView
-from .views import DashboardOverviewView, MockReportsView
+from .views import DashboardOverviewView, MockReportsView, TriggerSyncView
 
 urlpatterns = [
     # Auth
@@ -10,5 +10,6 @@ urlpatterns = [
 
     # Dashboard & Reports
     path("dashboard/overview/", DashboardOverviewView.as_view(), name="dashboard-overview"),
+    path("sync/run/", TriggerSyncView.as_view(), name="sync-run"),
     path("reports/<str:report_type>/", MockReportsView.as_view(), name="reports-mock"),
 ]

@@ -4,8 +4,34 @@ from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
 from decimal import Decimal
 
-from core.models import Order, OrderItem, FinancialTransactionType
+from core.models import Order, OrderItem, MarketplaceAccount, FinancialTransactionType
 from core.services.profit_calculator import ProfitCalculator
+from core.tasks import sync_all_trendyol_data_task
+
+class TriggerSyncView(APIView):
+    """
+    Dashboard'dan manuel "Trendyol Senkronize Et" butonuna basıldığında tetiklenir.
+    Kullanıcının Trendyol hesaplarını bulup Celery task'ine gönderir.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        org = getattr(user.profile, 'organization', None)
+
+        if not org:
+            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+            
+        accounts = MarketplaceAccount.objects.filter(organization=org, channel=MarketplaceAccount.Channel.TRENDYOL, is_active=True)
+        
+        if not accounts.exists():
+            return Response({"error": "Aktif bir Trendyol API hesabı bulunamadı."}, status=404)
+            
+        for acc in accounts:
+            # Trigger celery task asynchronously
+            sync_all_trendyol_data_task.delay(str(acc.id))
+            
+        return Response({"message": f"{accounts.count()} hesap için senkronizasyon kuyruğa eklendi."})
 
 class DashboardOverviewView(APIView):
     """

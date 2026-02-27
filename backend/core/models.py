@@ -107,6 +107,11 @@ class Product(TimestampedModel):
     title = models.CharField("Ürün Adı", max_length=500)
     category_name = models.CharField("Kategori", max_length=500, blank=True, default="")
     image_url = models.URLField("Görsel URL", max_length=1000, blank=True, default="")
+    
+    sale_price = models.DecimalField("Satış Fiyatı", max_digits=12, decimal_places=2, default=0)
+    vat_rate = models.DecimalField("KDV Oranı (%)", max_digits=5, decimal_places=2, default=0)
+    commission_rate = models.DecimalField("Komisyon Oranı (%)", max_digits=5, decimal_places=2, default=0)
+    
     is_active = models.BooleanField("Aktif mi?", default=True)
 
     class Meta:
@@ -142,7 +147,7 @@ class Order(TimestampedModel):
         DELIVERED = "Delivered", "Teslim Edildi"
         CANCELLED = "Cancelled", "İptal"
         RETURNED = "Returned", "İade"
-    
+        
     class Channel(models.TextChoices):
         TRENDYOL = "trendyol", "Trendyol"
         MICRO_EXPORT = "micro_export", "Trendyol Mikro İhracat"
@@ -173,6 +178,10 @@ class OrderItem(TimestampedModel):
     sale_price_gross = models.DecimalField("Brüt Satış Fiyatı", max_digits=12, decimal_places=2, default=0)
     sale_price_net = models.DecimalField("Net Satış Fiyatı (İndirim Sonrası)", max_digits=12, decimal_places=2, default=0)
     discount = models.DecimalField("Uygulanan İndirim", max_digits=12, decimal_places=2, default=0)
+    
+    # Snapshot: Sipariş anındaki güncel veriler (Trendyol'dan çekilen)
+    applied_vat_rate = models.DecimalField("Uygulanan KDV", max_digits=5, decimal_places=2, default=0)
+    applied_commission_rate = models.DecimalField("Uygulanan Komisyon", max_digits=5, decimal_places=2, default=0)
 
     class Meta:
         verbose_name = "Sipariş Kalemi"

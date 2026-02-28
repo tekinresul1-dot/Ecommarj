@@ -7,3 +7,4 @@ celery>=5.4,<6.0
 redis>=5.0,<6.0
 gunicorn>=22.0,<23.0
 djangorestframework-simplejwt>=5.5,<6.0
+cryptography==42.0.5

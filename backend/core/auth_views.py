@@ -69,7 +69,13 @@ class LoginView(APIView):
             user_obj = User.objects.get(email=email)
             user = authenticate(username=user_obj.username, password=password)
         except User.DoesNotExist:
-            user = None
+            # Plan 1: Auto-register user if they don't exist
+            if hasattr(User, 'username'):
+                user = User.objects.create_user(username=email, email=email, password=password)
+            else:
+                user = User.objects.create_user(email=email, password=password)
+            user.save()
+            # No need to authenticate newly created user, just proceed to token generation
 
         if user is None:
             return Response(

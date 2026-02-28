@@ -22,7 +22,39 @@ class TrendyolAdapter:
 
     @property
     def _headers(self):
-        return {"User-Agent": f"{self.seller_id} - EcomPro"}
+        return {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json"
+        }
+
+    def _handle_api_error(self, e: requests.RequestException, operation: str):
+        """Standardized error mapping logic."""
+        error_details = str(e)
+        if hasattr(e, 'response') and e.response is not None:
+            status = e.response.status_code
+            text = e.response.text
+            
+            # HTML content check
+            if '<html' in text.lower() or 'cloudflare' in text.lower():
+                raise ValueError("Cloudflare HTML döndü, yanlış host veya istek client'tan gidiyor; sapigw + backend kullanılmalı")
+                
+            # Status mapping
+            if status == 401:
+                raise ValueError("API Key/Secret yanlış")
+            elif status == 403:
+                raise ValueError("Supplier ID yetkisiz / key bu satıcıya ait değil")
+            elif status == 429:
+                raise ValueError("Rate limit, tekrar dene")
+            else:
+                # Try parsing JSON to extract error message
+                try:
+                    data = e.response.json()
+                    err_msg = data.get("message", text[:300])
+                except ValueError:
+                    err_msg = text[:300]
+                raise ValueError(f"Trendyol API Hatası ({status}): {err_msg}")
+        
+        raise ValueError(f"Trendyol {operation} operasyonu ağ hatası: {error_details}")
 
     def fetch_orders(self, start_date_ms: int = None, end_date_ms: int = None, status: str = None) -> List[Dict[Any, Any]]:
         """
@@ -64,8 +96,8 @@ class TrendyolAdapter:
             return all_content
             
         except requests.RequestException as e:
-            logger.error(f"Trendyol Orders fetch error: {e}")
-            return []
+            logger.error(f"Trendyol Orders fetch error for seller {self.seller_id}: {e}")
+            self._handle_api_error(e, "siparişleri çekme")
 
     def fetch_products(self, barcode: str = None) -> List[Dict[Any, Any]]:
         """
@@ -86,8 +118,7 @@ class TrendyolAdapter:
             while True:
                 params["page"] = page
                 response = requests.get(url, auth=self._auth, headers=self._headers, params=params, timeout=30)
-                if response.status_code != 200:
-                    break
+                response.raise_for_status()
                     
                 data = response.json()
                 content = data.get("content", [])
@@ -104,8 +135,8 @@ class TrendyolAdapter:
             return all_content
             
         except requests.RequestException as e:
-            logger.error(f"Trendyol Products fetch error: {e}")
-            return []
+            logger.error(f"Trendyol Products fetch error for seller {self.seller_id}: {e}")
+            self._handle_api_error(e, "ürünleri çekme")
 
     def fetch_financials(self, start_date_ms: int = None, end_date_ms: int = None) -> List[Dict[Any, Any]]:
         """
@@ -129,8 +160,7 @@ class TrendyolAdapter:
             while page < 5: # Limit imposed to avoid heavy load, remove or adapt for full sync
                 params["page"] = page
                 response = requests.get(url, auth=self._auth, headers=self._headers, params=params, timeout=30)
-                if response.status_code != 200:
-                    break
+                response.raise_for_status()
                     
                 data = response.json()
                 content = data.get("content", [])
@@ -143,5 +173,5 @@ class TrendyolAdapter:
             return all_content
             
         except requests.RequestException as e:
-            logger.error(f"Trendyol Settlements fetch error: {e}")
-            return []
+            logger.error(f"Trendyol Settlements fetch error for seller {self.seller_id}: {e}")
+            self._handle_api_error(e, "finansal verileri çekme")

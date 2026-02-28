@@ -10,6 +10,7 @@ import {
   TrendingUp, TrendingDown, DollarSign, Package, AlertCircle, ShoppingCart, Info
 } from "lucide-react";
 import clsx from "clsx";
+import { api } from "@/lib/api";
 
 const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f43f5e', '#f97316', '#eab308', '#22c55e', '#14b8a6'];
 // Custom colors for funnel chart (green to red descent)
@@ -33,19 +34,11 @@ export default function DashboardOverview() {
       setLoading(true);
       setError("");
       try {
-        const token = localStorage.getItem("access_token");
-        const res = await fetch(`http://localhost:8000/api/dashboard/overview/?${searchParams.toString()}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (res.ok) {
-          const json = await res.json();
-          setData(json);
-        } else {
-          setError("Veriler yüklenirken bir hata oluştu.");
-        }
+        const json = await api.get(`/dashboard/overview/?${searchParams.toString()}`);
+        setData(json);
       } catch (err) {
         console.error(err);
-        setError("Sunucuya bağlanılamadı.");
+        setError("Veriler yüklenirken bir hata oluştu veya sunucuya bağlanılamadı.");
       } finally {
         setLoading(false);
       }
@@ -153,7 +146,7 @@ export default function DashboardOverview() {
                       ))}
                     </Pie>
                     <Tooltip
-                      formatter={(value: number) => formatTR(value)}
+                      formatter={(value: any) => formatTR(value)}
                       contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px', fontSize: '13px' }}
                       itemStyle={{ color: '#fff' }}
                     />

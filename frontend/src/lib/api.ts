@@ -1,4 +1,14 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+const getApiBase = () => {
+    // Traverse proxy bug: Next.js strips trailing slashes on POST requests which breaks Django's APPEND_SLASH.
+    // Connect directly to the port 8000 API relative to the current window hostname to continue supporting LAN usage.
+    if (typeof window !== "undefined") {
+        return `${window.location.protocol}//${window.location.hostname}:8000/api`;
+    }
+    let base = process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+    return base.replace(/\/$/, ""); // Remove trailing slash if any
+};
+
+const API_BASE = getApiBase();
 
 const getHeaders = () => {
     const token = localStorage.getItem("access_token");
@@ -10,7 +20,12 @@ const getHeaders = () => {
 
 export const api = {
     get: async (endpoint: string) => {
-        const res = await fetch(`${API_BASE}${endpoint}`, {
+        let cleanEndpoint = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
+        if (!cleanEndpoint.endsWith('/')) {
+            cleanEndpoint += '/';
+        }
+        console.log("API_BASE:", API_BASE, "endpoint:", cleanEndpoint);
+        const res = await fetch(`${API_BASE}${cleanEndpoint}`, {
             headers: getHeaders(),
         });
 
@@ -19,7 +34,9 @@ export const api = {
                 localStorage.removeItem("access_token");
                 window.location.href = "/giris";
             }
-            throw new Error(`API Hatası: ${res.statusText}`);
+            const text = await res.text();
+            console.log("API_BASE:", API_BASE, "endpoint:", cleanEndpoint); console.error(`API Error on GET ${endpoint} (${res.status}): ${text.substring(0, 150)}`);
+            throw new Error(`API Hatası (${res.status}): ${res.statusText}`);
         }
 
         // Sometimes responses from DELETE/empty actions have no JSON
@@ -28,7 +45,11 @@ export const api = {
     },
 
     post: async (endpoint: string, data: any) => {
-        const res = await fetch(`${API_BASE}${endpoint}`, {
+        let cleanEndpoint = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
+        if (!cleanEndpoint.endsWith('/')) {
+            cleanEndpoint += '/';
+        }
+        const res = await fetch(`${API_BASE}${cleanEndpoint}`, {
             method: "POST",
             headers: getHeaders(),
             body: JSON.stringify(data),
@@ -41,15 +62,34 @@ export const api = {
             }
 
             let errorData = null;
+            let errorText = "";
             try {
-                errorData = await res.json();
+                errorText = await res.text();
+                errorData = JSON.parse(errorText);
             } catch {
-                throw new Error(`API Hatası sunucudan anlaşılamadı.`);
+                // Return plain text if JSON parsing fails (e.g., 500 HTML pages)
+                throw new Error(`${res.status} ${res.statusText}: ${errorText.substring(0, 150)}...`);
             }
 
             // Return structured error message if provided by DRF
-            const errorMsg = errorData?.error || errorData?.detail || Object.values(errorData)[0];
-            throw new Error(errorMsg ? String(errorMsg) : `API Hatası: ${res.statusText}`);
+            let errorMsg = `API Hatası (${res.status}): ${res.statusText}`;
+            if (errorData) {
+                if (typeof errorData === 'string') {
+                    errorMsg = errorData;
+                } else if (errorData.error) {
+                    errorMsg = String(errorData.error);
+                } else if (errorData.detail) {
+                    errorMsg = String(errorData.detail);
+                } else if (errorData.message) {
+                    errorMsg = String(errorData.message);
+                } else if (typeof errorData === 'object') {
+                    const firstVal = Object.values(errorData)[0];
+                    if (firstVal && typeof firstVal === 'string') {
+                        errorMsg = firstVal;
+                    }
+                }
+            }
+            throw new Error(errorMsg);
         }
 
         const text = await res.text();

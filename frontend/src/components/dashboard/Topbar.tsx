@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { User, Bell, Menu, LogOut, ExternalLink } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { api } from "@/lib/api";
 
 export function Topbar({ setMobileNavOpen }: { setMobileNavOpen: (v: boolean) => void }) {
     const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -19,19 +20,10 @@ export function Topbar({ setMobileNavOpen }: { setMobileNavOpen: (v: boolean) =>
                 return;
             }
             try {
-                const res = await fetch("http://localhost:8000/api/auth/me/", {
-                    headers: { Authorization: `Bearer ${token}` }
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    setUserData(data);
-                } else {
-                    localStorage.removeItem("access_token");
-                    localStorage.removeItem("refresh_token");
-                    router.push("/giris");
-                }
+                const data = await api.get("/auth/me/");
+                setUserData(data);
             } catch (err) {
-                console.error(err);
+                console.error("Topbar fetchUser failed:", err);
             }
         };
         fetchUser();

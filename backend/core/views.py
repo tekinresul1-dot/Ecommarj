@@ -17,10 +17,14 @@ class TriggerSyncView(APIView):
 
     def post(self, request):
         user = request.user
-        org = getattr(user.profile, 'organization', None)
-
+        # Auto-create profile and org if missing (useful for superusers or first time testing)
+        from core.models import UserProfile, Organization
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        org = profile.organization
         if not org:
-            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+            org, _ = Organization.objects.get_or_create(name=f"{user.username} Organizasyonu")
+            profile.organization = org
+            profile.save()
             
         accounts = MarketplaceAccount.objects.filter(organization=org, channel=MarketplaceAccount.Channel.TRENDYOL, is_active=True)
         
@@ -28,10 +32,15 @@ class TriggerSyncView(APIView):
             return Response({"error": "Aktif bir Trendyol API hesabı bulunamadı."}, status=404)
             
         for acc in accounts:
-            # Trigger celery task asynchronously
-            sync_all_trendyol_data_task.delay(str(acc.id))
+            try:
+                # Run synchronously for MVP/Testing instead of celery
+                sync_all_trendyol_data_task(str(acc.id))
+            except ValueError as e:
+                return Response({"error": str(e)}, status=400)
+            except Exception as e:
+                return Response({"error": f"Senkronizasyon sırasında hata oluştu: {str(e)}"}, status=500)
             
-        return Response({"message": f"{accounts.count()} hesap için senkronizasyon kuyruğa eklendi."})
+        return Response({"message": f"{accounts.count()} hesap için senkronizasyon başarıyla tamamlandı."})
 
 class DashboardOverviewView(APIView):
     """
@@ -43,10 +52,13 @@ class DashboardOverviewView(APIView):
 
     def get(self, request):
         user = request.user
-        org = getattr(user.profile, 'organization', None)
-
+        from core.models import UserProfile, Organization
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        org = profile.organization
         if not org:
-            return Response({"error": "Kullanıcının bir organizasyonu bulunamadı."}, status=400)
+            org, _ = Organization.objects.get_or_create(name=f"{user.username} Organizasyonu")
+            profile.organization = org
+            profile.save()
 
         # Filtreleri al
         channel = request.query_params.get("channel", "trendyol")
@@ -237,19 +249,89 @@ class MockReportsView(APIView):
         })
 
 
-class SettingsTrendyolAPIView(APIView):
+class TrendyolTestConnectionView(APIView):
     """
-    Kullanıcının Trendyol API Key, Secret ve Satıcı ID'sini kaydettiği veya çektiği endpoint.
-    POST atıldıktan sonra (güncellenirse) otomatik senkronizasyon tetiklenebilir.
+    POST /api/integrations/trendyol/test-connection/
+    Trendyol bağlantısını test eder (1 ürün çekmeye çalışır).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        api_key = request.data.get("api_key", "").strip()
+        api_secret = request.data.get("api_secret", "").strip()
+        supplier_id = request.data.get("supplier_id", "").strip()
+
+        if not all([api_key, api_secret, supplier_id]):
+            return Response({"ok": False, "message": "Eksik bilgi: api_key, api_secret veya supplier_id gerekli."}, status=400)
+
+        import requests
+        url = f"https://api.trendyol.com/sapigw/suppliers/{supplier_id}/products"
+        params = {"approved": "true", "page": 0, "size": 1}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json"
+        }
+        
+        try:
+            res = requests.get(url, auth=(api_key, api_secret), params=params, headers=headers, timeout=30)
+            
+            if not res.ok:
+                text = res.text
+                status = res.status_code
+                message = text[:300]
+                
+                # HTML check
+                if '<html' in text.lower() or 'cloudflare' in text.lower():
+                    message = "Trendyol API erişiminiz engellendi. Girdiğiniz bilgiler hatalı olabilir veya geçici bir kesinti yaşanıyor."
+                elif status == 401:
+                    message = "API Key veya API Secret hatalı. Lütfen kontrol edip tekrar deneyin."
+                elif status == 403:
+                    message = "Bu Satıcı ID (Supplier ID) için yetkiniz yok veya bilgiler eşleşmiyor."
+                elif status == 429:
+                    message = "Rate limit, tekrar dene"
+                else:
+                    try:
+                        data = res.json()
+                        message = data.get("message", text[:300])
+                    except ValueError:
+                        pass
+                
+                return Response({
+                    "ok": False,
+                    "code": status,
+                    "message": message,
+                    "status": res.status_code,
+                    "raw_head": dict(res.headers)
+                }, status=400)
+                
+            data = res.json()
+            return Response({
+                "ok": True,
+                "sample_product_count_hint": data.get("totalElements", 0),
+                "request_id": res.headers.get("x-request-id", "unknown")
+            })
+            
+        except requests.RequestException as e:
+            return Response({"ok": False, "message": f"Bağlantı hatası: {str(e)}", "code": 500}, status=500)
+
+
+class TrendyolSaveCredentialsView(APIView):
+    """
+    POST /api/integrations/trendyol/save-credentials/
+    Kullanıcının Trendyol API Key, Secret ve Satıcı ID'sini veritabanına şifreli kaydeder.
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        org = getattr(user.profile, 'organization', None)
-
+        from core.models import UserProfile, Organization
+        from core.utils.encryption import decrypt_value
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        org = profile.organization
         if not org:
-            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+            org, _ = Organization.objects.get_or_create(name=f"{user.username} Organizasyonu")
+            profile.organization = org
+            profile.save()
             
         account = MarketplaceAccount.objects.filter(
             organization=org, 
@@ -260,46 +342,54 @@ class SettingsTrendyolAPIView(APIView):
             return Response({
                 "api_key": "",
                 "api_secret": "",
-                "seller_id": ""
+                "supplier_id": ""
             })
 
         return Response({
             "api_key": account.api_key,
-            "api_secret": account.api_secret, 
-            "seller_id": account.seller_id
+            "api_secret": decrypt_value(account.api_secret), 
+            "supplier_id": account.seller_id
         })
 
     def post(self, request):
         user = request.user
-        org = getattr(user.profile, 'organization', None)
-
+        from core.models import UserProfile, Organization
+        from core.utils.encryption import encrypt_value
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        org = profile.organization
         if not org:
-            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+            org, _ = Organization.objects.get_or_create(name=f"{user.username} Organizasyonu")
+            profile.organization = org
+            profile.save()
 
         api_key = request.data.get("api_key", "").strip()
         api_secret = request.data.get("api_secret", "").strip()
-        seller_id = request.data.get("seller_id", "").strip()
+        supplier_id = request.data.get("supplier_id", "").strip()
 
-        if not seller_id:
-            return Response({"error": "Satıcı ID (Seller ID) zorunludur."}, status=400)
+        if not supplier_id:
+            return Response({"error": "Satıcı ID (Supplier ID) zorunludur."}, status=400)
 
-        # Update or create account for this organization
         account, created = MarketplaceAccount.objects.update_or_create(
             organization=org,
             channel=MarketplaceAccount.Channel.TRENDYOL,
             defaults={
-                "store_name": f"Trendyol Store - {seller_id}",
-                "seller_id": seller_id,
+                "store_name": f"Trendyol Store - {supplier_id}",
+                "seller_id": supplier_id,
                 "api_key": api_key,
-                "api_secret": api_secret,
+                "api_secret": encrypt_value(api_secret),
                 "is_active": True
             }
         )
 
-        # Trigger auto-sync if requested
         auto_sync = request.data.get("auto_sync", True)
         if auto_sync and account.api_key and account.api_secret:
-            sync_all_trendyol_data_task.delay(str(account.id))
+            try:
+                sync_all_trendyol_data_task(str(account.id))
+            except ValueError as e:
+                # Silmiyoruz, kullanıcı Settings sayfasında düzeltip tekrar test bağlantısı atabilir
+                return Response({"error": str(e)}, status=400)
+            except Exception as e:
+                return Response({"error": f"Veriler senkronize edilemedi. Hata: {str(e)}"}, status=500)
 
         return Response({"message": "Trendyol API bilgileri başarıyla kaydedildi.", "sync_started": auto_sync})
 
@@ -313,10 +403,13 @@ class ProductListView(APIView):
 
     def get(self, request):
         user = request.user
-        org = getattr(user.profile, 'organization', None)
-
+        from core.models import UserProfile, Organization
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        org = profile.organization
         if not org:
-            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+            org, _ = Organization.objects.get_or_create(name=f"{user.username} Organizasyonu")
+            profile.organization = org
+            profile.save()
 
         from core.models import Product
         

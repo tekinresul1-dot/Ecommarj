@@ -3,8 +3,7 @@
 import { useState, FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-
-const API_BASE = "http://localhost:8000/api";
+import { api } from "@/lib/api";
 
 export default function RegisterPage() {
     const router = useRouter();
@@ -55,38 +54,14 @@ export default function RegisterPage() {
 
         setIsLoading(true);
         try {
-            const res = await fetch(`${API_BASE}/auth/register/`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    name: form.name,
-                    email: form.email,
-                    password: form.password,
-                    password_confirm: form.passwordConfirm,
-                    phone: form.phone,
-                    company: form.company,
-                }),
+            const data = await api.post("/auth/register/", {
+                name: form.name,
+                email: form.email,
+                password: form.password,
+                password_confirm: form.passwordConfirm,
+                phone: form.phone,
+                company: form.company,
             });
-
-            const data = await res.json();
-
-            if (!res.ok) {
-                // Map backend errors to form fields
-                if (data.errors) {
-                    const fieldErrors: Record<string, string> = {};
-                    for (const [key, val] of Object.entries(data.errors)) {
-                        const messages = Array.isArray(val) ? val : [val];
-                        fieldErrors[key] = (messages as string[]).join(" ");
-                    }
-                    setErrors(fieldErrors);
-                    if (fieldErrors.non_field_errors) {
-                        showToast(fieldErrors.non_field_errors, "error");
-                    }
-                } else {
-                    showToast("Bir hata oluştu. Lütfen tekrar deneyin.", "error");
-                }
-                return;
-            }
 
             // Save tokens
             localStorage.setItem("access_token", data.tokens.access);
@@ -94,9 +69,9 @@ export default function RegisterPage() {
             localStorage.setItem("user", JSON.stringify(data.user));
 
             showToast("Hesap başarıyla oluşturuldu! Yönlendiriliyorsunuz...", "success");
-            setTimeout(() => router.push("/"), 1500);
-        } catch {
-            showToast("Sunucuya bağlanılamadı. Lütfen tekrar deneyin.", "error");
+            setTimeout(() => router.push("/dashboard"), 1500);
+        } catch (error: any) {
+            showToast(error.message || "Sunucuya bağlanılamadı. Lütfen tekrar deneyin.", "error");
         } finally {
             setIsLoading(false);
         }
@@ -150,8 +125,8 @@ export default function RegisterPage() {
             {/* Toast */}
             {toast && (
                 <div className={`fixed top-20 left-1/2 -translate-x-1/2 z-50 px-6 py-3 rounded-xl backdrop-blur-xl text-sm text-white shadow-xl animate-slide-up border ${toastType === "success"
-                        ? "bg-emerald-500/20 border-emerald-400/30"
-                        : "bg-rose-500/20 border-rose-400/30"
+                    ? "bg-emerald-500/20 border-emerald-400/30"
+                    : "bg-rose-500/20 border-rose-400/30"
                     }`}>
                     {toast}
                 </div>

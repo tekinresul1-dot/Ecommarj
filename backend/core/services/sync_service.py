@@ -8,6 +8,7 @@ from core.models import (
     FinancialTransaction, FinancialTransactionType, ProductVariant
 )
 from core.services.trendyol_adapter import TrendyolAdapter
+from core.utils.encryption import decrypt_value
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class TrendyolSyncService:
         self.organization = account.organization
         self.adapter = TrendyolAdapter(
             api_key=account.api_key,
-            api_secret=account.api_secret,
+            api_secret=decrypt_value(account.api_secret),
             seller_id=account.seller_id
         )
 

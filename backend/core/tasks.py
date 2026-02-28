@@ -20,4 +20,5 @@ def sync_all_trendyol_data_task(account_id: str):
         return "Error: Account not found"
     except Exception as e:
         logger.error(f"Sync failed for account {account_id}: {e}")
-        return f"Error: {e}"
+        # Raise the error so it can be caught by synchronous API views
+        raise ValueError(str(e))

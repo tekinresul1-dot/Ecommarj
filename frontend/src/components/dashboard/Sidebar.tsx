@@ -26,7 +26,7 @@ const navigation = [
     },
     { name: "Kâr Marjı Listesi", href: "/margins", icon: FileText },
     { name: "Ürün Fiyatlandırma", href: "/pricing-rules", icon: Tag },
-    { name: "Ürün Ayarları", href: "/product-settings", icon: Sliders },
+    { name: "Ürün Ayarları", href: "/products", icon: Sliders },
     { name: "Uyarılar", href: "/alerts", icon: AlertTriangle },
     { name: "Hakediş Kontrolü", href: "/payouts", icon: CreditCard },
     { name: "Ayarlar", href: "/settings", icon: Settings },

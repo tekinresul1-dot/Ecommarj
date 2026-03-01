@@ -1,8 +1,167 @@
-export default function Page() {
+"use client";
+
+import { useState, useEffect } from "react";
+import { formatCurrency, formatPercentage } from "@/lib/utils/format";
+import apiClient from "@/lib/api/client";
+import { Filter, Download } from "lucide-react";
+import clsx from "clsx";
+
+interface ProductAnalysis {
+  id: string; // barcode used as id
+  barcode: string;
+  title: string;
+  stock: number;
+  model_code: string;
+  category: string;
+  total_sold_quantity: number;
+  total_sales_amount: string;
+  total_profit: string;
+  return_cargo_loss: string;
+  profit_margin: string;
+  profit_rate: string;
+}
+
+export default function ProductAnalysisPage() {
+  const [products, setProducts] = useState<ProductAnalysis[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchProducts();
+  }, []);
+
+  const fetchProducts = async () => {
+    try {
+      const result = await apiClient.get<ProductAnalysis[]>("/reports/product-analysis/");
+      if (result.ok) {
+        setProducts(result.data);
+      }
+    } catch (error) {
+      console.error("Product analysis fetch error:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-semibold text-white capitalize">Reports - Products</h1>
-      <p className="text-white/60 mt-2">Bu sayfa yakında aktif edilecek.</p>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold text-white tracking-tight">Ürün Analizi</h1>
+        <div className="flex gap-3">
+          <button className="flex items-center gap-2 bg-navy-800 hover:bg-navy-700 text-white/90 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-white/5">
+            <Filter className="w-4 h-4" />
+            Filtrele
+          </button>
+          <button className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-green-900/20">
+            <Download className="w-4 h-4" />
+            Raporu İndir
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-navy-900 rounded-xl border border-white/5 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm text-white/80">
+            <thead className="bg-navy-800/50 text-white border-b border-light-navy uppercase text-[10px] tracking-wider font-semibold">
+              <tr>
+                <th className="px-4 py-4 whitespace-nowrap">Barkod</th>
+                <th className="px-4 py-4 whitespace-nowrap">Ürün Adı</th>
+                <th className="px-4 py-4 whitespace-nowrap">Stok</th>
+                <th className="px-4 py-4 whitespace-nowrap">Model Kodu</th>
+                <th className="px-4 py-4 whitespace-nowrap">Kategori</th>
+                <th className="px-4 py-4 whitespace-nowrap text-right">Satılan Adet</th>
+                <th className="px-4 py-4 whitespace-nowrap text-right">Satış Tutarı (₺)</th>
+                <th className="px-4 py-4 whitespace-nowrap text-right">Kâr Tutarı (₺)</th>
+                <th className="px-4 py-4 whitespace-nowrap text-right">İade Kargo Zararı (₺)</th>
+                <th className="px-4 py-4 whitespace-nowrap text-right">Kâr Oranı (%)</th>
+                <th className="px-4 py-4 whitespace-nowrap text-right">Kâr Marjı (%)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              {loading ? (
+                <tr>
+                  <td colSpan={11} className="px-6 py-8 text-center text-white/50">
+                    <div className="flex justify-center items-center gap-3">
+                      <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                      Ürün verileri yükleniyor...
+                    </div>
+                  </td>
+                </tr>
+              ) : products.length === 0 ? (
+                <tr>
+                  <td colSpan={11} className="px-6 py-8 text-center text-white/50">
+                    Henüz kayıtlı analiz verisi bulunmuyor.
+                  </td>
+                </tr>
+              ) : (
+                products.map((item) => {
+                  const profitVal = parseFloat(item.total_profit);
+                  const lossVal = parseFloat(item.return_cargo_loss);
+                  const isProfitable = profitVal > 0;
+                  const isLoss = profitVal < 0;
+
+                  return (
+                    <tr key={item.id} className="hover:bg-white/5 transition-colors group">
+                      <td className="px-4 py-3 whitespace-nowrap font-medium text-white/90">
+                        {item.barcode}
+                      </td>
+                      <td className="px-4 py-3 min-w-[200px] max-w-[300px] truncate" title={item.title}>
+                        {item.title}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-white/70">
+                        {item.stock}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-white/70">
+                        {item.model_code || "-"}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-white/70">
+                        {item.category || "-"}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right font-medium text-blue-400">
+                        {item.total_sold_quantity}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right font-medium text-red-400">
+                        {formatCurrency(parseFloat(item.total_sales_amount))}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right">
+                        <span className={clsx(
+                          "font-bold",
+                          isProfitable ? "text-green-500" : isLoss ? "text-red-400" : "text-white/80"
+                        )}>
+                          {formatCurrency(profitVal)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right">
+                        <span className={clsx(
+                          "font-medium",
+                          lossVal > 0 ? "text-red-400" : "text-white/60"
+                        )}>
+                          {lossVal > 0 ? `-${formatCurrency(lossVal)}` : "₺0,00"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right">
+                        <span className={clsx(
+                          "font-medium",
+                          isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80"
+                        )}>
+                          {formatPercentage(parseFloat(item.profit_rate))}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-right">
+                        <span className={clsx(
+                          "font-medium",
+                          isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80"
+                        )}>
+                          {formatPercentage(parseFloat(item.profit_margin))}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
-  )
+  );
 }

@@ -95,4 +95,54 @@ export const api = {
         const text = await res.text();
         return text ? JSON.parse(text) : {};
     },
+
+    patch: async (endpoint: string, data: any) => {
+        let cleanEndpoint = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
+        if (!cleanEndpoint.endsWith('/')) {
+            cleanEndpoint += '/';
+        }
+        const res = await fetch(`${API_BASE}${cleanEndpoint}`, {
+            method: "PATCH",
+            headers: getHeaders(),
+            body: JSON.stringify(data),
+        });
+
+        if (!res.ok) {
+            if (res.status === 401) {
+                localStorage.removeItem("access_token");
+                window.location.href = "/giris";
+            }
+
+            let errorData = null;
+            let errorText = "";
+            try {
+                errorText = await res.text();
+                errorData = JSON.parse(errorText);
+            } catch {
+                throw new Error(`${res.status} ${res.statusText}: ${errorText.substring(0, 150)}...`);
+            }
+
+            let errorMsg = `API Hatası (${res.status}): ${res.statusText}`;
+            if (errorData) {
+                if (typeof errorData === 'string') {
+                    errorMsg = errorData;
+                } else if (errorData.error) {
+                    errorMsg = String(errorData.error);
+                } else if (errorData.detail) {
+                    errorMsg = String(errorData.detail);
+                } else if (errorData.message) {
+                    errorMsg = String(errorData.message);
+                } else if (typeof errorData === 'object') {
+                    const firstVal = Object.values(errorData)[0];
+                    if (firstVal && typeof firstVal === 'string') {
+                        errorMsg = firstVal;
+                    }
+                }
+            }
+            throw new Error(errorMsg);
+        }
+
+        const text = await res.text();
+        return text ? JSON.parse(text) : {};
+    },
 };

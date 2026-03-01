@@ -1,6 +1,6 @@
 from django.urls import path
 from .auth_views import RegisterView, LoginView, MeView
-from .views import DashboardOverviewView, MockReportsView, TriggerSyncView, ProductListView
+from .views import DashboardOverviewView, MockReportsView, TriggerSyncView, ProductListView, OrderListView, ProductAnalysisView
 from .views import TrendyolTestConnectionView, TrendyolSaveCredentialsView
 
 urlpatterns = [
@@ -17,6 +17,8 @@ urlpatterns = [
     path("integrations/trendyol/test-connection/", TrendyolTestConnectionView.as_view(), name="trendyol-test-conn"),
     path("integrations/trendyol/save-credentials/", TrendyolSaveCredentialsView.as_view(), name="trendyol-save-cred"),
     path("products/", ProductListView.as_view(), name="product-list"),
+    path("orders/", OrderListView.as_view(), name="order-list"),
     
+    path("reports/product-analysis/", ProductAnalysisView.as_view(), name="product-analysis"),
     path("reports/<str:report_type>/", MockReportsView.as_view(), name="reports-mock"),
 ]

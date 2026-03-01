@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { GlobalFilter } from "@/components/dashboard/GlobalFilter";
+import { LowStockWidget } from "@/components/dashboard/LowStockWidget";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend, FunnelChart, Funnel, LabelList
 } from "recharts";
@@ -21,7 +22,9 @@ const formatTR = (val: number | string) => {
   return new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' }).format(num);
 };
 
-export default function DashboardOverview() {
+import { Suspense } from "react";
+
+function DashboardContent() {
   const searchParams = useSearchParams();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -121,9 +124,9 @@ export default function DashboardOverview() {
       </div>
 
       {/* Main Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className={clsx("grid grid-cols-1 gap-6", channel === "trendyol" && data?.low_stock_alerts ? "lg:grid-cols-3" : "lg:grid-cols-2")}>
         {/* Pie Breakdown */}
-        <div className="bg-navy-900 border border-white/10 rounded-xl p-5 shadow-sm">
+        <div className={clsx("bg-navy-900 border border-white/10 rounded-xl p-5 shadow-sm", channel === "trendyol" && data?.low_stock_alerts ? "lg:col-span-2" : "")}>
           <h3 className="text-sm font-semibold text-white/80 mb-4">Maliyet Dağılımı (₺)</h3>
           <div className="flex flex-col md:flex-row items-center justify-center gap-6 h-[300px]">
             <div className="w-full md:w-1/2 h-full">
@@ -171,8 +174,15 @@ export default function DashboardOverview() {
           </div>
         </div>
 
+        {/* Low Stock Alerts Widget */}
+        {channel === "trendyol" && data?.low_stock_alerts && (
+          <div className="col-span-1">
+            <LowStockWidget alerts={data.low_stock_alerts} />
+          </div>
+        )}
+
         {/* Profit Perf Area Chart */}
-        <div className="bg-navy-900 border border-white/10 rounded-xl p-5 shadow-sm flex flex-col">
+        <div className={clsx("bg-navy-900 border border-white/10 rounded-xl p-5 shadow-sm flex flex-col", channel === "trendyol" && data?.low_stock_alerts ? "lg:col-span-2" : "")}>
           <h3 className="text-sm font-semibold text-white/80 mb-4">Kâr Performansı Trendi</h3>
           <div className="flex-1 min-h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
@@ -208,14 +218,13 @@ export default function DashboardOverview() {
               <ResponsiveContainer width="100%" height="100%">
                 <FunnelChart>
                   <Tooltip
-                    formatter={(value: number) => formatTR(value)}
+                    formatter={(value: any) => formatTR(value)}
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px', fontSize: '13px' }}
                   />
                   <Funnel
                     dataKey="value"
                     data={funnelData}
                     isAnimationActive
-                    shape={<svg></svg> /* Recharts default funnel is basic, but supported */}
                   >
                     <LabelList position="right" fill="#cbd5e1" stroke="none" dataKey="name" style={{ fontSize: '12px' }} />
                   </Funnel>
@@ -275,6 +284,14 @@ export default function DashboardOverview() {
       </div>
 
     </div>
+  );
+}
+
+export default function DashboardOverview() {
+  return (
+    <Suspense fallback={<div className="p-8 text-white/50 text-center">Yükleniyor...</div>}>
+      <DashboardContent />
+    </Suspense>
   );
 }
 

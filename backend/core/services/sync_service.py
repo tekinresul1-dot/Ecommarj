@@ -45,8 +45,11 @@ class TrendyolSyncService:
             if not barcode:
                 continue
                 
+            # Stok ve Fiyat
             vat_rate = Decimal(str(p_data.get("vatRate", "0")))
             sale_price = Decimal(str(p_data.get("salePrice", "0")))
+            stock_quantity = int(p_data.get("quantity", 0))
+            
             # Not: Basic product endpoint doesn't always return commissions, fallback or default to 0
             
             product, created = Product.objects.update_or_create(
@@ -60,8 +63,13 @@ class TrendyolSyncService:
                     "sale_price": sale_price,
                     "vat_rate": vat_rate,
                     "marketplace_sku": p_data.get("productMainId", ""),
+                    "current_stock": stock_quantity,
                 }
             )
+            
+            if created:
+                product.initial_stock = stock_quantity
+                product.save(update_fields=["initial_stock"])
 
     def sync_orders(self):
         logger.info("Fetching orders...")

@@ -568,7 +568,7 @@ class OrderListView(APIView):
 
     def get(self, request):
         try:
-            profile = request.user.userprofile
+            profile = request.user.profile
             org = profile.organization
         except Exception:
             return Response({"error": "Organizasyon bulunamadı"}, status=400)
@@ -707,9 +707,9 @@ class ProductAnalysisView(APIView):
                 analysis_map[barcode] = {
                     "barcode": barcode,
                     "title": variant.product.title,
-                    "stock": variant.stock,
-                    "model_code": variant.product.model_code or "",
-                    "category": variant.product.category or "",
+                    "stock": variant.product.current_stock or 0,
+                    "model_code": variant.product.marketplace_sku or "",
+                    "category": variant.product.category_name or "",
                     "total_sold_quantity": 0,
                     "total_sales_amount": Decimal("0.00"),
                     "total_profit": Decimal("0.00"),

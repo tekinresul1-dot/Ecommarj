@@ -63,6 +63,8 @@ class DashboardOverviewView(APIView):
         # Filtreleri al
         channel = request.query_params.get("channel", "trendyol")
         countries = request.query_params.get("countries", "") # virgülle ayrılmış
+        min_date_str = request.query_params.get("min_date")
+        max_date_str = request.query_params.get("max_date")
 
         # Organizasyonun siparişlerini çek
         orders_qs = Order.objects.select_related("marketplace_account").filter(
@@ -72,6 +74,15 @@ class DashboardOverviewView(APIView):
         if countries:
             country_list = [c.strip() for c in countries.split(",")]
             orders_qs = orders_qs.filter(country_code__in=country_list)
+
+        if min_date_str and max_date_str:
+            from datetime import datetime, time
+            try:
+                min_date = timezone.make_aware(datetime.strptime(min_date_str, "%Y-%m-%d"))
+                max_date = timezone.make_aware(datetime.combine(datetime.strptime(max_date_str, "%Y-%m-%d"), time.max))
+                orders_qs = orders_qs.filter(order_date__gte=min_date, order_date__lte=max_date)
+            except ValueError:
+                pass # Parse error, apply no date filter
 
         total_orders = orders_qs.count()
         order_items = OrderItem.objects.select_related("order").prefetch_related("transactions").filter(order__in=orders_qs)
@@ -214,6 +225,24 @@ class DashboardOverviewView(APIView):
                 "profit": str(round(total_profit / 6 + Decimal(i * 10), 2)) # Mock trend distribution
             })
 
+        # Kritik Stok Uyarıları
+        from core.models import Product
+        org_products = Product.objects.filter(organization=org, is_active=True)
+        low_stock_list = []
+        for p in org_products:
+            if p.is_low_stock:
+                low_stock_list.append({
+                    "id": p.id,
+                    "title": p.title,
+                    "barcode": p.barcode,
+                    "current_stock": p.current_stock,
+                    "initial_stock": p.initial_stock,
+                    "image_url": p.image_url
+                })
+        
+        # En az stoğu kalanı en üste al, max 5 tane yolla
+        low_stock_list = sorted(low_stock_list, key=lambda x: x["current_stock"])[:5]
+
         return Response({
             "kpis": {
                 "total_orders": total_orders,
@@ -233,6 +262,7 @@ class DashboardOverviewView(APIView):
             "ads_metrics": ads_metrics,
             "net_profit_funnel": net_profit_funnel,
             "profit_performance_history": history,
+            "low_stock_alerts": low_stock_list,
         })
 
 
@@ -413,12 +443,12 @@ class ProductListView(APIView):
 
         from core.models import Product
         
-        products = Product.objects.filter(organization=org).order_by('-created_at')
+        products = Product.objects.filter(organization=org).prefetch_related('variants').order_by('-created_at')
         
         # Simple serialization
         data = []
         for p in products:
-            data.append({
+            product_data = {
                 "id": p.id,
                 "title": p.title,
                 "barcode": p.barcode,
@@ -427,10 +457,319 @@ class ProductListView(APIView):
                 "vat_rate": str(p.vat_rate),
                 "commission_rate": str(p.commission_rate),
                 "image_url": p.image_url,
-                "is_active": p.is_active
-            })
+                "desi": str(p.desi),
+                "default_carrier": p.default_carrier,
+                "brand": p.brand,
+                "return_rate": str(p.return_rate),
+                "fast_delivery": p.fast_delivery,
+                "is_active": p.is_active,
+                "variants": [
+                    {
+                        "id": v.id,
+                        "title": v.title,
+                        "barcode": v.barcode,
+                        "cost_price": str(v.cost_price),
+                        "cost_vat_rate": str(v.cost_vat_rate),
+                        "desi": str(v.desi) if v.desi is not None else None
+                    } for v in p.variants.all()
+                ]
+            }
+            data.append(product_data)
 
         return Response({
             "count": len(data),
             "results": data
         })
+
+    def patch(self, request):
+        """
+        Updates product fields like desi and default_carrier, or variant fields like cost_price.
+        Expects payload: 
+        { "id": 123, "desi": "1.50", "default_carrier": "Aras Kargo" } -> Product update
+        { "variant_id": 456, "cost_price": "250.00", "cost_vat_rate": "10", "desi": "0.5" } -> Variant update
+        """
+        user = request.user
+        from core.models import UserProfile, Organization, Product, ProductVariant
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        org = profile.organization
+        
+        variant_id = request.data.get("variant_id")
+        
+        if variant_id:
+            try:
+                variant = ProductVariant.objects.get(id=variant_id, product__organization=org)
+            except ProductVariant.DoesNotExist:
+                return Response({"error": "Variant not found"}, status=404)
+                
+            if "cost_price" in request.data:
+                variant.cost_price = Decimal(str(request.data["cost_price"]))
+            if "cost_vat_rate" in request.data:
+                variant.cost_vat_rate = Decimal(str(request.data["cost_vat_rate"]))
+            if "desi" in request.data:
+                if request.data["desi"] is None or request.data["desi"] == "":
+                    variant.desi = None
+                else:
+                    variant.desi = Decimal(str(request.data["desi"]))
+                    
+            variant.save()
+            return Response({
+                "message": "Varyant güncellendi.",
+                "variant_id": variant.id,
+                "cost_price": str(variant.cost_price),
+                "cost_vat_rate": str(variant.cost_vat_rate),
+                "desi": str(variant.desi) if variant.desi is not None else None
+            })
+            
+        else:
+            product_id = request.data.get("id")
+            if not product_id:
+                 return Response({"error": "Product ID or Variant ID is required"}, status=400)
+                 
+            try:
+                product = Product.objects.get(id=product_id, organization=org)
+            except Product.DoesNotExist:
+                return Response({"error": "Product not found"}, status=404)
+                
+            if "desi" in request.data:
+                try:
+                    product.desi = Decimal(str(request.data["desi"]))
+                except Exception:
+                    return Response({"error": "Invalid desi format"}, status=400)
+                    
+            if "default_carrier" in request.data:
+                product.default_carrier = str(request.data["default_carrier"])
+                
+            if "return_rate" in request.data:
+                try:
+                    product.return_rate = Decimal(str(request.data["return_rate"]))
+                except Exception:
+                    return Response({"error": "Invalid return_rate format"}, status=400)
+                    
+            if "fast_delivery" in request.data:
+                product.fast_delivery = bool(request.data["fast_delivery"])
+                
+            product.save()
+            
+            return Response({
+                "id": product.id,
+                "desi": str(product.desi),
+                "default_carrier": product.default_carrier,
+                "return_rate": str(product.return_rate),
+                "fast_delivery": product.fast_delivery,
+                "message": "Ürün güncellendi."
+            })
+
+class OrderListView(APIView):
+    """
+    GET /api/orders/
+    Sipariş listesini ve her siparişin detaylı kârlılık dökümünü döner.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            profile = request.user.userprofile
+            org = profile.organization
+        except Exception:
+            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+
+        from core.models import Order
+        from core.services.profit_calculator import ProfitCalculator
+        from decimal import Decimal
+        
+        # Sadece bu organizasyona ait olan siparişleri getir
+        # prefetch_related ile db call optimizasyonu
+        orders = Order.objects.filter(marketplace_account__organization=org).prefetch_related('items__product_variant__product', 'items__transactions').order_by('-order_date')
+        
+        # Sadece son 50 siparişi gönderelim
+        orders = orders[:50]
+
+        data = []
+        for order in orders:
+            total_gross = Decimal("0.00")
+            total_net_profit = Decimal("0.00")
+            
+            items_data = []
+            
+            cum_breakdown = {
+                "product_cost": Decimal("0.00"),
+                "commission": Decimal("0.00"),
+                "shipping_fee": Decimal("0.00"),
+                "service_fee": Decimal("0.00"),
+                "withholding": Decimal("0.00"),
+                "net_kdv": Decimal("0.00"),
+                "satis_kdv": Decimal("0.00"),
+                "alis_kdv": Decimal("0.00"),
+                "kargo_kdv": Decimal("0.00"),
+                "komisyon_kdv": Decimal("0.00"),
+                "hizmet_bedeli_kdv": Decimal("0.00"),
+            }
+
+            for item in order.items.all():
+                profit_info = ProfitCalculator.calculate_for_order_item(item)
+                
+                total_gross += profit_info["gross_revenue"]
+                total_net_profit += profit_info["net_profit"]
+                
+                bd = profit_info["breakdown"]
+                cum_breakdown["product_cost"] += bd.get("PRODUCT_COST", Decimal("0.00"))
+                cum_breakdown["commission"] += bd.get("COMMISSION", Decimal("0.00"))
+                cum_breakdown["shipping_fee"] += bd.get("SHIPPING_FEE", Decimal("0.00"))
+                cum_breakdown["service_fee"] += bd.get("SERVICE_FEE", Decimal("0.00"))
+                cum_breakdown["withholding"] += bd.get("WITHHOLDING", Decimal("0.00"))
+                
+                kdv = profit_info.get("kdv_detail", {})
+                cum_breakdown["net_kdv"] += kdv.get("net_kdv", Decimal("0.00"))
+                cum_breakdown["satis_kdv"] += kdv.get("satis_kdv", Decimal("0.00"))
+                cum_breakdown["alis_kdv"] += kdv.get("alis_kdv", Decimal("0.00"))
+                cum_breakdown["kargo_kdv"] += kdv.get("kargo_kdv", Decimal("0.00"))
+                cum_breakdown["komisyon_kdv"] += kdv.get("komisyon_kdv", Decimal("0.00"))
+                cum_breakdown["hizmet_bedeli_kdv"] += kdv.get("hizmet_bedeli_kdv", Decimal("0.00"))
+                
+                title = "Bilinmeyen Ürün"
+                barcode = item.sku
+                commission_rate = Decimal("0.00")
+                if item.product_variant and item.product_variant.product:
+                    title = item.product_variant.product.title
+                    barcode = item.product_variant.barcode
+                    commission_rate = item.product_variant.product.commission_rate
+                
+                items_data.append({
+                    "id": item.id,
+                    "title": title,
+                    "barcode": barcode,
+                    "quantity": item.quantity,
+                    "sale_price_gross": str(item.sale_price_gross),
+                    "commission_rate": str(commission_rate),
+                    "profit": profit_info
+                })
+                
+            profit_margin = Decimal("0.00")
+            if total_gross > Decimal("0.00"):
+                profit_margin = round((total_net_profit / total_gross) * Decimal("100.00"), 2)
+                
+            profit_on_cost = Decimal("0.00")
+            if cum_breakdown["product_cost"] > Decimal("0.00"):
+                profit_on_cost = round((total_net_profit / cum_breakdown["product_cost"]) * Decimal("100.00"), 2)
+
+            data.append({
+                "id": order.id,
+                "order_number": order.marketplace_order_id,
+                "order_date": order.order_date.strftime("%d %b %Y - %H:%M") if order.order_date else "",
+                "status": order.status,
+                "total_gross": str(total_gross),
+                "total_profit": str(total_net_profit),
+                "profit_margin": str(profit_margin),
+                "profit_on_cost": str(profit_on_cost),
+                "items": items_data,
+                "aggregated_breakdown": {k: str(v) for k, v in cum_breakdown.items()}
+            })
+
+        return Response({"ok": True, "data": data})
+
+class ProductAnalysisView(APIView):
+    """
+    GET /api/reports/product-analysis/
+    Ürün bazlı (barkod/varyant) kârlılık verilerini döndürür.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            profile = request.user.profile
+            org = profile.organization
+        except Exception as e:
+            return Response({"error": f"Organizasyon bulunamadı: {str(e)}"}, status=400)
+
+        from core.models import OrderItem, Order
+        from core.services.profit_calculator import ProfitCalculator
+        from decimal import Decimal
+
+        orders = Order.objects.filter(marketplace_account__organization=org)
+        
+        items = OrderItem.objects.filter(
+            order__in=orders,
+            product_variant__isnull=False
+        ).select_related('product_variant', 'product_variant__product', 'order').prefetch_related('transactions')
+
+        analysis_map = {}
+
+        for item in items:
+            variant = item.product_variant
+            if not variant or not variant.product:
+                continue
+
+            barcode = variant.barcode or ""
+            if not barcode:
+                continue
+
+            if barcode not in analysis_map:
+                analysis_map[barcode] = {
+                    "barcode": barcode,
+                    "title": variant.product.title,
+                    "stock": variant.stock,
+                    "model_code": variant.product.model_code or "",
+                    "category": variant.product.category or "",
+                    "total_sold_quantity": 0,
+                    "total_sales_amount": Decimal("0.00"),
+                    "total_profit": Decimal("0.00"),
+                    "total_cost": Decimal("0.00"),
+                    "return_cargo_loss": Decimal("0.00"),
+                }
+
+            qty = item.quantity
+            is_returned = item.order.status.lower() in ["returned", "iade edildi", "cancelled", "iptal edildi"]
+            
+            # Gross profit calc
+            profit_info = ProfitCalculator.calculate_for_order_item(item)
+            
+            if not is_returned:
+                analysis_map[barcode]["total_sold_quantity"] += qty
+                analysis_map[barcode]["total_sales_amount"] += profit_info["gross_revenue"]
+                analysis_map[barcode]["total_profit"] += profit_info["net_profit"]
+                
+                # Approximate cost = sum of PRODUCT_COST in breakdown
+                bd = profit_info.get("breakdown", {})
+                analysis_map[barcode]["total_cost"] += bd.get("PRODUCT_COST", Decimal("0.00"))
+            else:
+                # If returned, usually you lose the shipping fee out and back.
+                # Assuming 2x one-way shipping as standard return loss proxy, or just 1x depending on market logic.
+                bd = profit_info.get("breakdown", {})
+                shipping = bd.get("SHIPPING_FEE", Decimal("0.00"))
+                shipping_kdv = profit_info.get("kdv_detail", {}).get("kargo_kdv", Decimal("0.00"))
+                analysis_map[barcode]["return_cargo_loss"] += (shipping + shipping_kdv)
+
+        data = []
+        for barcode, stats in analysis_map.items():
+            profit_margin = Decimal("0.00")
+            profit_rate = Decimal("0.00") 
+            
+            total_sales = stats["total_sales_amount"]
+            total_profit = stats["total_profit"]
+            total_cost = stats["total_cost"]
+
+            if total_sales > Decimal("0.00"):
+                profit_margin = round((total_profit / total_sales) * Decimal("100.00"), 2)
+                
+            if total_cost > Decimal("0.00"):
+                profit_rate = round((total_profit / total_cost) * Decimal("100.00"), 2)
+            
+            data.append({
+                "id": barcode, # Use barcode as unique id for react key
+                "barcode": stats["barcode"],
+                "title": stats["title"],
+                "stock": stats["stock"],
+                "model_code": stats["model_code"],
+                "category": stats["category"],
+                "total_sold_quantity": stats["total_sold_quantity"],
+                "total_sales_amount": str(stats["total_sales_amount"]),
+                "total_profit": str(stats["total_profit"]),
+                "return_cargo_loss": str(stats["return_cargo_loss"]),
+                "profit_margin": str(profit_margin),
+                "profit_rate": str(profit_rate),
+            })
+
+        # Sort by total sales amount desc
+        data.sort(key=lambda x: Decimal(x["total_sales_amount"]), reverse=True)
+
+        return Response({"ok": True, "data": data})

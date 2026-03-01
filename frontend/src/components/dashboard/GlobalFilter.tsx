@@ -3,7 +3,10 @@
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useCallback, useState, useEffect, useRef } from "react";
 import clsx from "clsx";
-import { Calendar, Globe, ChevronDown, Check } from "lucide-react";
+import { Calendar as CalendarIcon, Globe, ChevronDown, Check } from "lucide-react";
+import { DateRange } from "react-day-picker";
+import { format, parseISO } from "date-fns";
+import { DatePickerWithRange } from "./DateRangePicker";
 
 const MICRO_COUNTRIES = [
     { code: "TR", name: "Türkiye" },
@@ -32,9 +35,22 @@ export function GlobalFilter() {
     const [countryDropdownOpen, setCountryDropdownOpen] = useState(false);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
+    // Tarih seçimi state'i
+    const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+
     useEffect(() => {
         const c = searchParams.get("countries");
         setCountries(c ? c.split(",") : []);
+
+        // URL'den min_date / max_date okuma
+        const min_date = searchParams.get("min_date");
+        const max_date = searchParams.get("max_date");
+        if (min_date && max_date) {
+            setDateRange({
+                from: parseISO(min_date),
+                to: parseISO(max_date),
+            });
+        }
     }, [searchParams]);
 
     useEffect(() => {
@@ -83,6 +99,19 @@ export function GlobalFilter() {
     const applyCountryFilter = () => {
         setCountryDropdownOpen(false);
         router.push(pathname + "?" + createQueryString("countries", countries.join(",")));
+    };
+
+    const handleDateChange = (newDateRange: DateRange | undefined) => {
+        setDateRange(newDateRange);
+        if (newDateRange?.from && newDateRange?.to) {
+            const min_date = format(newDateRange.from, "yyyy-MM-dd");
+            const max_date = format(newDateRange.to, "yyyy-MM-dd");
+
+            const params = new URLSearchParams(searchParams.toString());
+            params.set("min_date", min_date);
+            params.set("max_date", max_date);
+            router.push(pathname + "?" + params.toString());
+        }
     };
 
     const isAllSelected = countries.length === MICRO_COUNTRIES.length && MICRO_COUNTRIES.length > 0;
@@ -139,8 +168,8 @@ export function GlobalFilter() {
                                             {isAllSelected && <Check className="w-3.5 h-3.5 text-white" />}
                                         </div>
                                         <span className="text-sm font-medium text-white">Tümünü Seç</span>
+                                        <input type="checkbox" className="hidden" checked={isAllSelected} onChange={() => toggleCountry("ALL")} />
                                     </label>
-                                    <button onClick={() => toggleCountry("ALL")} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                                 </div>
 
                                 <div className="overflow-y-auto flex-1 p-2 scrollbar-thin scrollbar-thumb-white/10">
@@ -173,17 +202,10 @@ export function GlobalFilter() {
                         )}
                     </div>
                 )}
-                <div className="flex items-center gap-3 bg-navy-950 border border-white/10 rounded-xl px-4 h-11 w-full sm:w-auto hover:border-white/20 transition-colors cursor-pointer group">
-                    <Calendar className="w-4 h-4 text-blue-400" />
-                    <select className="bg-transparent text-white/90 group-hover:text-white font-medium text-sm outline-none focus:ring-0 cursor-pointer appearance-none pr-8 w-full h-full">
-                        <option value="today" className="bg-navy-900">Bugün</option>
-                        <option value="7days" className="bg-navy-900">Son 7 Gün</option>
-                        <option value="30days" className="bg-navy-900">Son 30 Gün</option>
-                        <option value="this_month" className="bg-navy-900">Bu Ay</option>
-                        <option value="last_month" className="bg-navy-900">Geçen Ay</option>
-                        <option value="all_time" className="bg-navy-900 shadow-xl">Tarih Aralığı Seç</option>
-                    </select>
-                </div>
+                <DatePickerWithRange
+                    date={dateRange}
+                    setDate={handleDateChange}
+                />
             </div>
         </div>
     )

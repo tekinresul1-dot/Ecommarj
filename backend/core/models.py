@@ -6,6 +6,7 @@ All domain models for multi-tenant e-commerce profitability tracking.
 
 from django.db import models
 from django.conf import settings
+from decimal import Decimal
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +113,24 @@ class Product(TimestampedModel):
     vat_rate = models.DecimalField("KDV Oranı (%)", max_digits=5, decimal_places=2, default=0)
     commission_rate = models.DecimalField("Komisyon Oranı (%)", max_digits=5, decimal_places=2, default=0)
     
+    initial_stock = models.IntegerField("İlk Stok", default=0, help_text="Sisteme ilk çekildiğindeki stok miktarı")
+    current_stock = models.IntegerField("Güncel Stok", default=0)
+    
+    desi = models.DecimalField("Desi", max_digits=6, decimal_places=2, default=Decimal("1.00"))
+    default_carrier = models.CharField("Varsayılan Kargo Firması", max_length=50, default="Trendyol Express")
+    
+    brand = models.CharField("Marka", max_length=255, blank=True, default="")
+    return_rate = models.DecimalField("İade Oranı (%)", max_digits=5, decimal_places=2, default=0)
+    fast_delivery = models.BooleanField("Bugün Kargoda", default=False)
+    
     is_active = models.BooleanField("Aktif mi?", default=True)
+
+    @property
+    def is_low_stock(self):
+        """Kritik stok uyarısı: Güncel stok, ilk stoğun %20'si veya altındaysa ve başlangıçta en az 5 ürün varsa."""
+        if self.initial_stock >= 5 and self.current_stock > 0:
+            return self.current_stock <= (self.initial_stock * 0.20)
+        return False
 
     class Meta:
         verbose_name = "Ürün"
@@ -126,6 +144,13 @@ class ProductVariant(TimestampedModel):
     barcode = models.CharField("Barkod", max_length=100, db_index=True)
     marketplace_sku = models.CharField("SKU / Varyant Kodu", max_length=255, blank=True, default="")
     title = models.CharField("Varyant Adı", max_length=500, blank=True, default="")
+
+    # Maliyet Bilgileri
+    cost_price = models.DecimalField("Ürün Maliyeti (KDV Dahil)", max_digits=12, decimal_places=2, default=0)
+    cost_vat_rate = models.DecimalField("Maliyet KDV Oranı (%)", max_digits=5, decimal_places=2, default=0)
+    
+    # Varyanta özel desi (boşsa ürün desisini kullanırız)
+    desi = models.DecimalField("Varyant Desi", max_digits=6, decimal_places=2, null=True, blank=True)
 
     class Meta:
         verbose_name = "Ürün Varyantı"
@@ -263,8 +288,25 @@ class ExchangeRate(TimestampedModel):
 
 
 # ---------------------------------------------------------------------------
-# 6. Pre-computed Analytics (Hız İçin)
+# 6. Pre-computed Analytics (Hız İçin) & Cargo Prices
 # ---------------------------------------------------------------------------
+
+class CargoPricing(TimestampedModel):
+    """
+    Kargo firmalarının desi bazında KDV hariç fiyat listesi.
+    """
+    carrier_name = models.CharField("Kargo Firması", max_length=100) # Trendyol Express, Aras, Yurtiçi vb.
+    desi = models.DecimalField("Desi", max_digits=6, decimal_places=2)
+    price_without_vat = models.DecimalField("KDV Hariç Fiyat (TL)", max_digits=10, decimal_places=2)
+
+    class Meta:
+        verbose_name = "Kargo Fiyatlandırması"
+        verbose_name_plural = "Kargo Fiyatlandırmaları"
+        unique_together = ("carrier_name", "desi")
+
+    def __str__(self):
+        return f"{self.carrier_name} - {self.desi} Desi: {self.price_without_vat} TL"
+
 
 class ProfitSnapshot(TimestampedModel):
     """Günlük, ürün veya kategori bazlı aggregate edilmiş snapshot tablosu."""

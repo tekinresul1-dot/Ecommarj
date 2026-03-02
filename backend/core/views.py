@@ -189,12 +189,24 @@ class DashboardOverviewView(APIView):
             "avg_discount_rate": str(round((total_discount / total_gross)*100, 2)) if total_gross > 0 else "0.00",
         }
         
-        # İade Metrikleri (Şimdilik mock veya iade tutarlarından)
+        # İade Metrikleri (Gerçek verilerden hesapla)
         return_loss_val = breakdown.get(FinancialTransactionType.RETURN_LOSS.value, Decimal("0.00"))
+        returned_orders_count = orders_qs.filter(status__in=["Returned", "Cancelled"]).count()
+        real_return_rate = Decimal("0.00")
+        if total_orders > 0:
+            real_return_rate = round(Decimal(returned_orders_count) / Decimal(total_orders) * Decimal("100"), 2)
+        
+        # Kargo zararı: İade edilen siparişlerin kargo maliyetlerini topla
+        returned_items = OrderItem.objects.filter(order__in=orders_qs.filter(status__in=["Returned", "Cancelled"]))
+        total_return_cargo_loss = Decimal("0.00")
+        for r_item in returned_items:
+            r_info = ProfitCalculator.calculate_for_order_item(r_item)
+            total_return_cargo_loss += r_info["breakdown"].get(FinancialTransactionType.SHIPPING_FEE.value, Decimal("0.00"))
+        
         return_metrics = {
-            "return_rate": "12.5", # Mock - Sipariş durumuna göre yapılmalı
-            "total_return_cost": str(return_loss_val),
-            "return_cargo_loss": str(round(return_loss_val * Decimal("0.6"), 2)), # Örnek kargo yansıması
+            "return_rate": str(real_return_rate),
+            "total_return_cost": str(return_loss_val + total_return_cargo_loss),
+            "return_cargo_loss": str(total_return_cargo_loss),
             "overseas_operation_fee": "0.00"
         }
         
@@ -216,13 +228,37 @@ class DashboardOverviewView(APIView):
             {"name": "Kâr", "value": str(funnel_net)},
         ]
         
-        # Geçici Kâr Performansı History (Area Chart için)
+        # Kâr Performansı Gerçek History (Area Chart için)
         from datetime import timedelta
+        from django.db.models.functions import TruncDate
+        from django.db.models import Sum
+        
         history = []
-        for i in range(5, -1, -1):
+        # Son 30 günde sipariş bazlı günlük kâr hesapla
+        day_range = 30
+        start_day = timezone.now() - timedelta(days=day_range)
+        daily_orders = orders_qs.filter(order_date__gte=start_day).annotate(day=TruncDate('order_date')).values('day').annotate(
+            day_gross=Sum('items__sale_price_gross')
+        ).order_by('day')
+        
+        # Basitleştirilmiş: Her güne düşen toplam brüt üzerinden oranla yansıt
+        daily_profit_map = {}
+        total_daily_gross = sum(d['day_gross'] or 0 for d in daily_orders)
+        for d in daily_orders:
+            day_str = d['day'].strftime("%d %b") if d['day'] else "?"
+            day_gross = d['day_gross'] or Decimal("0")
+            if total_daily_gross > 0:
+                day_profit = total_profit * (day_gross / Decimal(str(total_daily_gross)))
+            else:
+                day_profit = Decimal("0")
+            daily_profit_map[day_str] = round(day_profit, 2)
+        
+        # Son 14 gün göster (daha okunaklı)
+        for i in range(13, -1, -1):
+            day = (timezone.now() - timedelta(days=i)).strftime("%d %b")
             history.append({
-                "date": (timezone.now() - timedelta(days=i)).strftime("%d %b"),
-                "profit": str(round(total_profit / 6 + Decimal(i * 10), 2)) # Mock trend distribution
+                "date": day,
+                "profit": str(daily_profit_map.get(day, Decimal("0.00")))
             })
 
         # Kritik Stok Uyarıları
@@ -287,6 +323,10 @@ class TrendyolTestConnectionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        import requests as http_requests
+        import logging
+        logger = logging.getLogger(__name__)
+
         api_key = request.data.get("api_key", "").strip()
         api_secret = request.data.get("api_secret", "").strip()
         supplier_id = request.data.get("supplier_id", "").strip()
@@ -294,31 +334,57 @@ class TrendyolTestConnectionView(APIView):
         if not all([api_key, api_secret, supplier_id]):
             return Response({"ok": False, "message": "Eksik bilgi: api_key, api_secret veya supplier_id gerekli."}, status=400)
 
-        import requests
-        url = f"https://api.trendyol.com/sapigw/suppliers/{supplier_id}/products"
+        # CRITICAL: Correct base URL per official Trendyol docs:
+        # apigw.trendyol.com/integration/ (NOT api.trendyol.com/sapigw/ which is Cloudflare-blocked)
+        url = f"https://apigw.trendyol.com/integration/product/sellers/{supplier_id}/products"
         params = {"approved": "true", "page": 0, "size": 1}
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "application/json"
+            "User-Agent": f"{supplier_id} - SelfIntegration",
+            "Accept": "application/json",
         }
+
+        # Debug logging (secrets redacted)
+        logger.info(f"[TestConnection] URL: {url}")
+        logger.info(f"[TestConnection] Params: {params}")
+        logger.info(f"[TestConnection] User-Agent: {headers['User-Agent']}")
+        logger.info(f"[TestConnection] Auth: ({api_key[:4]}...***)")
+        
+        # Detect server public IP for diagnostics
+        server_ip = "bilinmiyor"
+        try:
+            ip_resp = http_requests.get("https://api.ipify.org", timeout=5)
+            if ip_resp.ok:
+                server_ip = ip_resp.text.strip()
+        except Exception:
+            pass
         
         try:
-            res = requests.get(url, auth=(api_key, api_secret), params=params, headers=headers, timeout=30)
+            res = http_requests.get(url, auth=(api_key, api_secret), params=params, headers=headers, timeout=30)
+            
+            # Debug: Log response info
+            request_id = res.headers.get("x-request-id", "N/A")
+            logger.info(f"[TestConnection] Status: {res.status_code}, x-request-id: {request_id}")
+            logger.info(f"[TestConnection] Response body preview: {res.text[:200]}")
             
             if not res.ok:
                 text = res.text
                 status = res.status_code
                 message = text[:300]
                 
-                # HTML check
+                # HTML check (Cloudflare block)
                 if '<html' in text.lower() or 'cloudflare' in text.lower():
-                    message = "Trendyol API erişiminiz engellendi. Girdiğiniz bilgiler hatalı olabilir veya geçici bir kesinti yaşanıyor."
+                    message = (
+                        f"Cloudflare tarafından engellendiniz (HTTP {status}). "
+                        f"Sunucu IP adresiniz: {server_ip} — "
+                        "Bu IP'nin Trendyol Satıcı Paneli'nde API whitelist'ine eklendiğinden emin olun. "
+                        "Ekleme sonrası yayılması 10-30 dakika sürebilir."
+                    )
                 elif status == 401:
                     message = "API Key veya API Secret hatalı. Lütfen kontrol edip tekrar deneyin."
                 elif status == 403:
-                    message = "Bu Satıcı ID (Supplier ID) için yetkiniz yok veya bilgiler eşleşmiyor."
+                    message = f"Erişim reddedildi (403). Sunucu IP: {server_ip}. Trendyol whitelist'ini kontrol edin."
                 elif status == 429:
-                    message = "Rate limit, tekrar dene"
+                    message = "Çok fazla istek gönderildi. Lütfen biraz bekleyip tekrar deneyin."
                 else:
                     try:
                         data = res.json()
@@ -330,18 +396,19 @@ class TrendyolTestConnectionView(APIView):
                     "ok": False,
                     "code": status,
                     "message": message,
-                    "status": res.status_code,
-                    "raw_head": dict(res.headers)
+                    "request_id": request_id,
+                    "server_ip": server_ip,
                 }, status=400)
                 
             data = res.json()
             return Response({
                 "ok": True,
                 "sample_product_count_hint": data.get("totalElements", 0),
-                "request_id": res.headers.get("x-request-id", "unknown")
+                "request_id": request_id,
             })
             
-        except requests.RequestException as e:
+        except http_requests.RequestException as e:
+            logger.error(f"[TestConnection] Network error: {e}")
             return Response({"ok": False, "message": f"Bağlantı hatası: {str(e)}", "code": 500}, status=500)
 
 
@@ -412,16 +479,23 @@ class TrendyolSaveCredentialsView(APIView):
         )
 
         auto_sync = request.data.get("auto_sync", True)
+        sync_result = None
         if auto_sync and account.api_key and account.api_secret:
             try:
                 sync_all_trendyol_data_task(str(account.id))
+                sync_result = "success"
             except ValueError as e:
-                # Silmiyoruz, kullanıcı Settings sayfasında düzeltip tekrar test bağlantısı atabilir
-                return Response({"error": str(e)}, status=400)
+                # Credentials saved but sync failed (e.g. Cloudflare block)
+                # Don't fail — let user know credentials are saved
+                sync_result = f"sync_failed: {str(e)}"
             except Exception as e:
-                return Response({"error": f"Veriler senkronize edilemedi. Hata: {str(e)}"}, status=500)
+                sync_result = f"sync_error: {str(e)}"
 
-        return Response({"message": "Trendyol API bilgileri başarıyla kaydedildi.", "sync_started": auto_sync})
+        return Response({
+            "message": "Trendyol API bilgileri başarıyla kaydedildi.",
+            "sync_started": auto_sync,
+            "sync_result": sync_result,
+        })
 
 
 class ProductListView(APIView):
@@ -442,12 +516,40 @@ class ProductListView(APIView):
             profile.save()
 
         from core.models import Product
+        from django.db.models import Q
+        from rest_framework.pagination import PageNumberPagination
+        from django.utils import timezone
+        import datetime
         
-        products = Product.objects.filter(organization=org).prefetch_related('variants').order_by('-created_at')
+        two_months_ago = timezone.now() - datetime.timedelta(days=60)
+        
+        products = Product.objects.filter(
+            organization=org,
+            is_active=True
+        ).filter(
+            Q(current_stock__gt=0) | 
+            Q(variants__orderitem__order__order_date__gte=two_months_ago)
+        ).prefetch_related('variants').order_by('-created_at').distinct()
+        
+        search = request.GET.get('search', '').strip()
+        if search:
+            products = products.filter(
+                Q(title__icontains=search) |
+                Q(barcode__icontains=search) |
+                Q(variants__barcode__icontains=search) |
+                Q(variants__title__icontains=search)
+            ).distinct()
+            
+        paginator = PageNumberPagination()
+        paginator.page_size = 50
+        paginator.page_size_query_param = 'page_size'
+        paginator.max_page_size = 100
+        
+        paginated_products = paginator.paginate_queryset(products, request)
         
         # Simple serialization
         data = []
-        for p in products:
+        for p in paginated_products:
             product_data = {
                 "id": p.id,
                 "title": p.title,
@@ -476,10 +578,7 @@ class ProductListView(APIView):
             }
             data.append(product_data)
 
-        return Response({
-            "count": len(data),
-            "results": data
-        })
+        return paginator.get_paginated_response(data)
 
     def patch(self, request):
         """
@@ -773,3 +872,181 @@ class ProductAnalysisView(APIView):
         data.sort(key=lambda x: Decimal(x["total_sales_amount"]), reverse=True)
 
         return Response({"ok": True, "data": data})
+
+
+class CategoryAnalysisView(APIView):
+    """
+    GET /api/reports/categories/
+    Kategori bazlı kârlılık verilerini döndürür.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            profile = request.user.profile
+            org = profile.organization
+        except Exception as e:
+            return Response({"error": f"Organizasyon bulunamadı: {str(e)}"}, status=400)
+
+        from core.models import OrderItem, Order, Product
+        from core.services.profit_calculator import ProfitCalculator
+        from decimal import Decimal
+
+        orders = Order.objects.filter(
+            marketplace_account__organization=org,
+            status__in=["Delivered", "Shipped"]
+        )
+
+        items = OrderItem.objects.filter(
+            order__in=orders,
+            product_variant__isnull=False
+        ).select_related('product_variant', 'product_variant__product', 'order').prefetch_related('transactions')
+
+        category_map = {}
+
+        for item in items:
+            variant = item.product_variant
+            if not variant or not variant.product:
+                continue
+
+            category = variant.product.category_name or "Kategorisiz"
+
+            if category not in category_map:
+                category_map[category] = {
+                    "category": category,
+                    "product_count": set(),
+                    "total_sold_quantity": 0,
+                    "total_sales_amount": Decimal("0.00"),
+                    "total_profit": Decimal("0.00"),
+                    "total_cost": Decimal("0.00"),
+                    "total_commission": Decimal("0.00"),
+                    "total_cargo": Decimal("0.00"),
+                }
+
+            profit_info = ProfitCalculator.calculate_for_order_item(item)
+            bd = profit_info.get("breakdown", {})
+
+            category_map[category]["product_count"].add(variant.product.id)
+            category_map[category]["total_sold_quantity"] += item.quantity
+            category_map[category]["total_sales_amount"] += profit_info["gross_revenue"]
+            category_map[category]["total_profit"] += profit_info["net_profit"]
+            category_map[category]["total_cost"] += bd.get("PRODUCT_COST", Decimal("0.00"))
+            category_map[category]["total_commission"] += bd.get("COMMISSION", Decimal("0.00"))
+            category_map[category]["total_cargo"] += bd.get("SHIPPING_FEE", Decimal("0.00"))
+
+        data = []
+        for cat, stats in category_map.items():
+            total_sales = stats["total_sales_amount"]
+            total_profit = stats["total_profit"]
+
+            profit_margin = Decimal("0.00")
+            if total_sales > Decimal("0.00"):
+                profit_margin = round((total_profit / total_sales) * Decimal("100.00"), 2)
+
+            data.append({
+                "id": cat,
+                "category": stats["category"],
+                "product_count": len(stats["product_count"]),
+                "total_sold_quantity": stats["total_sold_quantity"],
+                "total_sales_amount": str(stats["total_sales_amount"]),
+                "total_profit": str(stats["total_profit"]),
+                "total_commission": str(stats["total_commission"]),
+                "total_cargo": str(stats["total_cargo"]),
+                "profit_margin": str(profit_margin),
+            })
+
+        data.sort(key=lambda x: Decimal(x["total_sales_amount"]), reverse=True)
+        return Response({"ok": True, "data": data})
+
+
+class ReturnAnalysisView(APIView):
+    """
+    GET /api/reports/returns/
+    İade/iptal sipariş analizi döndürür.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            profile = request.user.profile
+            org = profile.organization
+        except Exception as e:
+            return Response({"error": f"Organizasyon bulunamadı: {str(e)}"}, status=400)
+
+        from core.models import OrderItem, Order
+        from core.services.profit_calculator import ProfitCalculator
+        from decimal import Decimal
+
+        all_orders = Order.objects.filter(marketplace_account__organization=org)
+        returned_orders = all_orders.filter(status__in=["Returned", "Cancelled"])
+
+        total_order_count = all_orders.count()
+        returned_order_count = returned_orders.count()
+
+        return_rate = Decimal("0.00")
+        if total_order_count > 0:
+            return_rate = round(Decimal(returned_order_count) / Decimal(total_order_count) * Decimal("100"), 2)
+
+        items = OrderItem.objects.filter(
+            order__in=returned_orders,
+            product_variant__isnull=False
+        ).select_related('product_variant', 'product_variant__product', 'order').prefetch_related('transactions')
+
+        product_return_map = {}
+        total_return_cargo_loss = Decimal("0.00")
+        total_return_revenue_loss = Decimal("0.00")
+
+        for item in items:
+            variant = item.product_variant
+            if not variant or not variant.product:
+                continue
+
+            barcode = variant.barcode or ""
+            if not barcode:
+                continue
+
+            profit_info = ProfitCalculator.calculate_for_order_item(item)
+            bd = profit_info.get("breakdown", {})
+            shipping_cost = bd.get("SHIPPING_FEE", Decimal("0.00"))
+
+            total_return_cargo_loss += shipping_cost
+            total_return_revenue_loss += profit_info["gross_revenue"]
+
+            if barcode not in product_return_map:
+                product_return_map[barcode] = {
+                    "barcode": barcode,
+                    "title": variant.product.title,
+                    "category": variant.product.category_name or "",
+                    "return_count": 0,
+                    "cargo_loss": Decimal("0.00"),
+                    "revenue_loss": Decimal("0.00"),
+                }
+
+            product_return_map[barcode]["return_count"] += item.quantity
+            product_return_map[barcode]["cargo_loss"] += shipping_cost
+            product_return_map[barcode]["revenue_loss"] += profit_info["gross_revenue"]
+
+        product_returns = []
+        for stats in product_return_map.values():
+            product_returns.append({
+                "barcode": stats["barcode"],
+                "title": stats["title"],
+                "category": stats["category"],
+                "return_count": stats["return_count"],
+                "cargo_loss": str(stats["cargo_loss"]),
+                "revenue_loss": str(stats["revenue_loss"]),
+            })
+
+        product_returns.sort(key=lambda x: int(x["return_count"]), reverse=True)
+
+        return Response({
+            "ok": True,
+            "summary": {
+                "total_orders": total_order_count,
+                "returned_orders": returned_order_count,
+                "return_rate": str(return_rate),
+                "total_return_cargo_loss": str(total_return_cargo_loss),
+                "total_return_revenue_loss": str(total_return_revenue_loss),
+            },
+            "data": product_returns
+        })

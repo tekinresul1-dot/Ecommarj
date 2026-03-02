@@ -21,8 +21,9 @@ const getHeaders = () => {
 export const api = {
     get: async (endpoint: string) => {
         let cleanEndpoint = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
-        if (!cleanEndpoint.endsWith('/')) {
-            cleanEndpoint += '/';
+        const [pathPart, queryPart] = cleanEndpoint.split('?');
+        if (!pathPart.endsWith('/')) {
+            cleanEndpoint = pathPart + '/' + (queryPart ? '?' + queryPart : '');
         }
         console.log("API_BASE:", API_BASE, "endpoint:", cleanEndpoint);
         const res = await fetch(`${API_BASE}${cleanEndpoint}`, {
@@ -30,7 +31,8 @@ export const api = {
         });
 
         if (!res.ok) {
-            if (res.status === 401) {
+            if (res.status === 401 && !cleanEndpoint.includes("/auth/")) {
+                console.error("401 Unauthorized from API. Redirecting to login. Endpoint:", cleanEndpoint);
                 localStorage.removeItem("access_token");
                 window.location.href = "/giris";
             }
@@ -46,8 +48,9 @@ export const api = {
 
     post: async (endpoint: string, data: any) => {
         let cleanEndpoint = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
-        if (!cleanEndpoint.endsWith('/')) {
-            cleanEndpoint += '/';
+        const [pathPart, queryPart] = cleanEndpoint.split('?');
+        if (!pathPart.endsWith('/')) {
+            cleanEndpoint = pathPart + '/' + (queryPart ? '?' + queryPart : '');
         }
         const res = await fetch(`${API_BASE}${cleanEndpoint}`, {
             method: "POST",
@@ -56,7 +59,7 @@ export const api = {
         });
 
         if (!res.ok) {
-            if (res.status === 401) {
+            if (res.status === 401 && !cleanEndpoint.includes("/auth/")) {
                 localStorage.removeItem("access_token");
                 window.location.href = "/giris";
             }
@@ -68,20 +71,24 @@ export const api = {
                 errorData = JSON.parse(errorText);
             } catch {
                 // Return plain text if JSON parsing fails (e.g., 500 HTML pages)
-                throw new Error(`${res.status} ${res.statusText}: ${errorText.substring(0, 150)}...`);
+                console.error(`[api.post] ${cleanEndpoint} → ${res.status} (non-JSON):`, errorText.substring(0, 200));
+                throw new Error(`Sunucu hatası (${res.status}): ${errorText.substring(0, 150)}`);
             }
+
+            // Log structured error for debugging
+            console.error(`[api.post] ${cleanEndpoint} → ${res.status}:`, errorData);
 
             // Return structured error message if provided by DRF
             let errorMsg = `API Hatası (${res.status}): ${res.statusText}`;
             if (errorData) {
                 if (typeof errorData === 'string') {
                     errorMsg = errorData;
+                } else if (errorData.message) {
+                    errorMsg = String(errorData.message);
                 } else if (errorData.error) {
                     errorMsg = String(errorData.error);
                 } else if (errorData.detail) {
                     errorMsg = String(errorData.detail);
-                } else if (errorData.message) {
-                    errorMsg = String(errorData.message);
                 } else if (typeof errorData === 'object') {
                     const firstVal = Object.values(errorData)[0];
                     if (firstVal && typeof firstVal === 'string') {
@@ -98,8 +105,9 @@ export const api = {
 
     patch: async (endpoint: string, data: any) => {
         let cleanEndpoint = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
-        if (!cleanEndpoint.endsWith('/')) {
-            cleanEndpoint += '/';
+        const [pathPart, queryPart] = cleanEndpoint.split('?');
+        if (!pathPart.endsWith('/')) {
+            cleanEndpoint = pathPart + '/' + (queryPart ? '?' + queryPart : '');
         }
         const res = await fetch(`${API_BASE}${cleanEndpoint}`, {
             method: "PATCH",
@@ -108,7 +116,7 @@ export const api = {
         });
 
         if (!res.ok) {
-            if (res.status === 401) {
+            if (res.status === 401 && !cleanEndpoint.includes("/auth/")) {
                 localStorage.removeItem("access_token");
                 window.location.href = "/giris";
             }

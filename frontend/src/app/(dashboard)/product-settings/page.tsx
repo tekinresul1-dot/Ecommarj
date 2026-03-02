@@ -7,6 +7,7 @@ import { Package, Search, Image as ImageIcon, CircleDollarSign, Percent, ShieldA
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 interface Product {
   id: string;
@@ -24,17 +25,16 @@ export default function ProductSettingsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [page, setPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
 
-  useEffect(() => {
-    fetchProducts();
-  }, []);
-
-  const fetchProducts = async () => {
+  const fetchProducts = async (currentPage = page, search = searchTerm) => {
     try {
       setIsLoading(true);
-      const res = await api.get("/products/");
+      const res: any = await api.get(`/products/?page=${currentPage}&search=${search}`);
       if (res && res.results) {
         setProducts(res.results);
+        setTotalCount(res.count || 0);
       }
     } catch (error: any) {
       console.error("Products fetch error:", error);
@@ -44,10 +44,22 @@ export default function ProductSettingsPage() {
     }
   };
 
-  const filteredProducts = products.filter((p) =>
-    p.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.barcode.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  useEffect(() => {
+    fetchProducts(page, searchTerm);
+  }, [page]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (page !== 1) {
+        setPage(1);
+      } else {
+        fetchProducts(1, searchTerm);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  const filteredProducts = products;
 
   return (
     <div className="space-y-6">
@@ -76,7 +88,7 @@ export default function ProductSettingsPage() {
           </div>
 
           <Badge variant="outline" className="hidden sm:inline-flex bg-slate-950 border-slate-800 text-slate-400">
-            Toplam: {products.length} Ürün
+            Toplam: {totalCount} Ürün
           </Badge>
         </div>
 
@@ -165,6 +177,33 @@ export default function ProductSettingsPage() {
               )}
             </TableBody>
           </Table>
+        </div>
+
+        {/* Pagination Controls */}
+        <div className="p-4 border-t border-slate-800 flex items-center justify-between bg-slate-900/50">
+          <div className="text-sm text-slate-400">
+            Toplam <span className="font-semibold text-slate-200">{totalCount}</span> üründen <span className="font-semibold text-slate-200">{totalCount > 0 ? (page - 1) * 50 + 1 : 0}-{Math.min(page * 50, totalCount)}</span> arası gösteriliyor.
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page === 1}
+              onClick={() => setPage(page - 1)}
+              className="border-slate-700 bg-slate-800 text-slate-300 hover:text-white"
+            >
+              Önceki
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={page * 50 >= totalCount}
+              onClick={() => setPage(page + 1)}
+              className="border-slate-700 bg-slate-800 text-slate-300 hover:text-white"
+            >
+              Sonraki
+            </Button>
+          </div>
         </div>
       </div>
     </div>

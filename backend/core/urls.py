@@ -1,7 +1,11 @@
 from django.urls import path
 from .auth_views import RegisterView, LoginView, MeView
-from .views import DashboardOverviewView, MockReportsView, TriggerSyncView, ProductListView, OrderListView, ProductAnalysisView
-from .views import TrendyolTestConnectionView, TrendyolSaveCredentialsView
+from .views import (
+    DashboardOverviewView, MockReportsView, TriggerSyncView,
+    ProductListView, OrderListView, ProductAnalysisView,
+    TrendyolTestConnectionView, TrendyolSaveCredentialsView,
+    CategoryAnalysisView, ReturnAnalysisView,
+)
 
 urlpatterns = [
     # Auth
@@ -19,6 +23,9 @@ urlpatterns = [
     path("products/", ProductListView.as_view(), name="product-list"),
     path("orders/", OrderListView.as_view(), name="order-list"),
     
+    # Reports — specific endpoints first, then catch-all mock
     path("reports/product-analysis/", ProductAnalysisView.as_view(), name="product-analysis"),
+    path("reports/categories/", CategoryAnalysisView.as_view(), name="category-analysis"),
+    path("reports/returns/", ReturnAnalysisView.as_view(), name="return-analysis"),
     path("reports/<str:report_type>/", MockReportsView.as_view(), name="reports-mock"),
 ]

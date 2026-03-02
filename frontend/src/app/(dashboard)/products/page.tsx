@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import Image from "next/image";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
@@ -15,7 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Package, Search, Save, RefreshCw, ChevronDown, ChevronUp, Copy, CheckCircle2 } from "lucide-react";
+import { Package, Search, Save, RefreshCw, ChevronDown, ChevronUp, Copy, CheckCircle2, Check } from "lucide-react";
 
 interface Variant {
     id: number;
@@ -48,6 +48,8 @@ export default function ProductsPage() {
     const [products, setProducts] = useState<Product[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState("");
+    const [page, setPage] = useState(1);
+    const [totalCount, setTotalCount] = useState(0);
 
     // UI states
     const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
@@ -55,11 +57,12 @@ export default function ProductsPage() {
     const [updatingProductId, setUpdatingProductId] = useState<number | null>(null);
     const [copiedBarcode, setCopiedBarcode] = useState<string | null>(null);
 
-    const fetchProducts = async () => {
+    const fetchProducts = async (currentPage = page, search = searchTerm) => {
         setIsLoading(true);
         try {
-            const res: any = await api.get("/products/");
+            const res: any = await api.get(`/products/?page=${currentPage}&search=${search}`);
             setProducts(res.results || []);
+            setTotalCount(res.count || 0);
         } catch (error) {
             console.error("Failed to load products:", error);
             toast.error("Ürünler yüklenemedi.");
@@ -69,15 +72,22 @@ export default function ProductsPage() {
     };
 
     useEffect(() => {
-        fetchProducts();
-    }, []);
+        fetchProducts(page, searchTerm);
+    }, [page]);
 
-    // Filter
-    const filteredProducts = products.filter((p) =>
-        p.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        p.barcode.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        p.variants.some(v => v.barcode.toLowerCase().includes(searchTerm.toLowerCase()) || v.title.toLowerCase().includes(searchTerm.toLowerCase()))
-    );
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            if (page !== 1) {
+                setPage(1); // this will trigger the fetch in the other effect
+            } else {
+                fetchProducts(1, searchTerm);
+            }
+        }, 600);
+        return () => clearTimeout(timer);
+    }, [searchTerm]);
+
+    // Filter - Server side handles it now
+    const filteredProducts = products;
 
     const toggleRow = (productId: number) => {
         setExpandedRows(prev => ({ ...prev, [productId]: !prev[productId] }));
@@ -182,7 +192,7 @@ export default function ProductsPage() {
                         />
                     </div>
                     <div className="flex items-center gap-2">
-                        <Button variant="outline" onClick={fetchProducts} disabled={isLoading} className="border-slate-700 text-slate-300 hover:text-white shrink-0 bg-slate-800 h-10">
+                        <Button variant="outline" onClick={() => fetchProducts(page, searchTerm)} disabled={isLoading} className="border-slate-700 text-slate-300 hover:text-white shrink-0 bg-slate-800 h-10">
                             <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
                             Yenile
                         </Button>
@@ -222,272 +232,220 @@ export default function ProductsPage() {
                                     </TableCell>
                                 </TableRow>
                             ) : (
-                                filteredProducts.map((p) => {
-                                    const variantCount = p.variants.length;
-                                    const isExpanded = expandedRows[p.id] || false;
-                                    const hasVariants = variantCount > 1;
+                                (() => {
+                                    // Group products by marketplace_sku (Model Kodu)
+                                    const groups: Record<string, { id: string, master: Product, children: Product[] }> = {};
+                                    filteredProducts.forEach(p => {
+                                        const key = p.marketplace_sku || `single_${p.id}`;
+                                        if (!groups[key]) {
+                                            groups[key] = { id: key, master: p, children: [] };
+                                        }
+                                        groups[key].children.push(p);
+                                    });
 
-                                    // Tek Varyantlı Ürün (Düz Satır)
-                                    if (!hasVariants && variantCount === 1) {
-                                        const v = p.variants[0];
+                                    return Object.values(groups).map((group) => {
+                                        const master = group.master;
+                                        const children = group.children;
+                                        const isExpanded = expandedRows[master.id] || false;
+                                        const totalVariants = children.reduce((acc, c) => acc + c.variants.length, 0);
+
                                         return (
-                                            <TableRow key={p.id} className="border-b border-slate-800 hover:bg-slate-800/30 transition-colors bg-slate-900 group">
-                                                <TableCell className="text-center px-2 align-middle">
-                                                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Tek</span>
-                                                </TableCell>
-                                                <TableCell className="px-2 max-w-[280px]">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="w-10 h-10 rounded-md overflow-hidden relative border border-slate-700 shrink-0 bg-slate-800">
-                                                            {p.image_url ? (
-                                                                <Image src={p.image_url} alt={p.title} fill className="object-cover" />
-                                                            ) : (
-                                                                <Package className="w-6 h-6 text-slate-600 absolute inset-0 m-auto" />
-                                                            )}
-                                                        </div>
-                                                        <div className="min-w-0 flex-1">
-                                                            <div className="font-semibold text-slate-200 text-[13px] truncate" title={p.title}>{p.title}</div>
-                                                            <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-2 truncate">
-                                                                <span>Kodu: <span className="text-slate-300">{p.marketplace_sku || "-"}</span></span>
-                                                                <span className="text-slate-600">|</span>
-                                                                <span>Marka: <span className="text-slate-300">{p.brand || "EcomPro"}</span></span>
+                                            <React.Fragment key={`group-${group.id}`}>
+                                                {/* Master Row */}
+                                                <TableRow className="bg-slate-900 border-b border-slate-800">
+                                                    <TableCell className="text-center px-2">
+                                                        <button
+                                                            onClick={() => toggleRow(master.id)}
+                                                            className={`flex items-center justify-center gap-1.5 rounded-full mx-auto py-1 px-3 transition-all border ${isExpanded ? 'bg-orange-500 text-white border-orange-400 shadow-sm shadow-orange-500/20' : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border-slate-700'}`}
+                                                            title="Varyantları Düzenle"
+                                                        >
+                                                            <span className="font-bold text-sm leading-none">{totalVariants}</span>
+                                                            <span className="text-[11px] font-medium leading-none">Varyant</span>
+                                                            {isExpanded ? <ChevronUp size={14} className="opacity-70" /> : <ChevronDown size={14} className="opacity-70" />}
+                                                        </button>
+                                                    </TableCell>
+                                                    <TableCell className="px-2 min-w-[320px]">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className="w-10 h-10 rounded-md overflow-hidden relative border border-slate-700 shrink-0 bg-slate-800">
+                                                                {master.image_url ? (
+                                                                    <Image src={master.image_url} alt={master.title} fill className="object-cover" />
+                                                                ) : (
+                                                                    <Package className="w-6 h-6 text-slate-600 absolute inset-0 m-auto" />
+                                                                )}
+                                                            </div>
+                                                            <div className="min-w-0 flex-1">
+                                                                <div className="font-semibold text-slate-200 text-[13px] line-clamp-1 cursor-pointer hover:text-orange-400 transition-colors" title={master.title} onClick={() => toggleRow(master.id)}>
+                                                                    {master.title.split('-')[0].trim()}
+                                                                </div>
+                                                                <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                                                    <span>Model Kodu: <span className="text-slate-200">{master.marketplace_sku || "-"}</span></span>
+                                                                    <span className="text-slate-600 hidden sm:inline">•</span>
+                                                                    <span>Marka: <span className="text-slate-200">{master.brand || "EcomPro"}</span></span>
+                                                                </div>
                                                             </div>
                                                         </div>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="px-2">
-                                                    <div className="flex items-center justify-center gap-1">
-                                                        <div className="border border-slate-700 rounded px-2 py-0.5 text-[11px] text-slate-300 bg-slate-950 font-mono">
-                                                            {v.barcode}
-                                                        </div>
-                                                        <button onClick={() => copyToClipboard(v.barcode)} className="text-slate-500 hover:text-white transition-colors">
-                                                            {copiedBarcode === v.barcode ? <CheckCircle2 size={14} className="text-green-500" /> : <Copy size={14} />}
-                                                        </button>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="px-2">
-                                                    <div className="flex items-center justify-center gap-1">
-                                                        <Input
-                                                            type="number" step="0.01"
-                                                            className="w-20 text-center h-8 bg-slate-950 border-slate-700 text-slate-200 text-sm focus-visible:ring-orange-500/50 font-medium"
-                                                            value={v.cost_price}
-                                                            onChange={(e) => handleVariantChange(p.id, v.id, "cost_price", e.target.value)}
-                                                        />
-                                                        <span className="text-[10px] text-slate-500">TRY</span>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="px-2">
-                                                    <div className="flex justify-center">
-                                                        <Input
-                                                            type="number"
-                                                            className="w-14 text-center h-8 bg-slate-950 border-slate-700 text-slate-300 text-sm focus-visible:ring-orange-500/50"
-                                                            value={v.cost_vat_rate}
-                                                            onChange={(e) => handleVariantChange(p.id, v.id, "cost_vat_rate", e.target.value)}
-                                                        />
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="px-2">
-                                                    <div className="flex justify-center">
+                                                    </TableCell>
+                                                    <TableCell className="text-center text-slate-600">---</TableCell>
+                                                    <TableCell className="text-center text-slate-600">---</TableCell>
+                                                    <TableCell className="text-center text-slate-600">---</TableCell>
+                                                    <TableCell className="text-center px-2">
                                                         <Input
                                                             type="number" step="0.1"
-                                                            className="w-14 text-center h-8 bg-slate-950 border-slate-700 text-slate-300 text-sm focus-visible:ring-orange-500/50"
-                                                            value={v.desi || p.desi}
-                                                            onChange={(e) => handleVariantChange(p.id, v.id, "desi", e.target.value)}
+                                                            className="w-14 text-center h-8 bg-slate-950 border-slate-700 text-slate-300 text-sm focus-visible:ring-orange-500/50 mx-auto"
+                                                            value={master.desi}
+                                                            onChange={(e) => handleProductChange(master.id, "desi", e.target.value)}
                                                         />
-                                                    </div>
-                                                </TableCell>
-                                                {/* İade Oranı ve Bugün Kargoda (Ürün Bazlı) */}
-                                                <TableCell className="px-2">
-                                                    <div className="flex justify-center">
+                                                    </TableCell>
+                                                    <TableCell className="text-center px-2">
                                                         <Input
                                                             type="number" step="0.01"
-                                                            className="w-16 text-center h-8 bg-slate-950 border-slate-700 text-slate-300 text-sm focus-visible:ring-orange-500/50"
-                                                            value={p.return_rate}
-                                                            onChange={(e) => handleProductChange(p.id, "return_rate", e.target.value)}
-                                                            placeholder="0.00"
+                                                            className="w-16 text-center h-8 bg-slate-950 border-slate-700 text-slate-300 text-sm focus-visible:ring-orange-500/50 mx-auto"
+                                                            value={master.return_rate}
+                                                            onChange={(e) => handleProductChange(master.id, "return_rate", e.target.value)}
                                                         />
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="px-2 text-center align-middle">
-                                                    <div className="flex items-center justify-center gap-2">
-                                                        <Switch
-                                                            checked={p.fast_delivery}
-                                                            onCheckedChange={() => toggleFastDelivery(p.id, p.fast_delivery)}
-                                                        />
-                                                        <span className={`text-[11px] font-medium ${p.fast_delivery ? 'text-green-400' : 'text-slate-500'}`}>
-                                                            {p.fast_delivery ? 'Açık' : 'Kapalı'}
-                                                        </span>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="text-right pr-4 px-2">
-                                                    <Button
-                                                        size="icon"
-                                                        onClick={async () => {
-                                                            await saveVariant(v);
-                                                            await saveProduct(p, false); // sessiz kaydet
-                                                        }}
-                                                        disabled={updatingVariantId === v.id || updatingProductId === p.id}
-                                                        className="h-8 w-8 bg-orange-500/10 text-orange-500 hover:bg-orange-500 hover:text-white border border-orange-500/20"
-                                                    >
-                                                        {(updatingVariantId === v.id || updatingProductId === p.id) ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                                                    </Button>
-                                                </TableCell>
-                                            </TableRow>
-                                        )
-                                    }
-
-                                    // Çok Varyantlı Ürün (Accordion)
-                                    return (
-                                        <>
-                                            <TableRow key={`main-${p.id}`} className="bg-slate-900 border-b border-slate-800">
-                                                <TableCell className="text-center px-2">
-                                                    <button
-                                                        onClick={() => toggleRow(p.id)}
-                                                        className="flex flex-col items-center justify-center bg-orange-500 hover:bg-orange-600 text-white rounded-lg mx-auto py-1 px-3 shadow-sm"
-                                                    >
-                                                        <div className="flex items-center gap-1 font-bold text-sm">
-                                                            <span>{variantCount}</span>
-                                                            {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                                                        </div>
-                                                    </button>
-                                                </TableCell>
-                                                <TableCell className="px-2 max-w-[280px]">
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="w-10 h-10 rounded-md overflow-hidden relative border border-slate-700 shrink-0 bg-slate-800">
-                                                            {p.image_url ? (
-                                                                <Image src={p.image_url} alt={p.title} fill className="object-cover" />
-                                                            ) : (
-                                                                <Package className="w-6 h-6 text-slate-600 absolute inset-0 m-auto" />
-                                                            )}
-                                                        </div>
-                                                        <div className="min-w-0 flex-1">
-                                                            <div className="font-semibold text-slate-200 text-[13px] truncate cursor-pointer hover:text-orange-400 transition-colors" title={p.title} onClick={() => toggleRow(p.id)}>{p.title}</div>
-                                                            <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-2 truncate">
-                                                                <span>Kodu: <span className="text-slate-300">{p.marketplace_sku || "-"}</span></span>
-                                                                <span className="text-slate-600">|</span>
-                                                                <span>Marka: <span className="text-slate-300">{p.brand || "EcomPro"}</span></span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="text-center text-slate-600">---</TableCell>
-                                                <TableCell className="text-center px-2">
-                                                    <div className="text-orange-400 font-semibold text-sm">Genel Aralık</div>
-                                                </TableCell>
-                                                <TableCell className="text-center text-slate-600">---</TableCell>
-                                                <TableCell className="text-center px-2">
-                                                    <Input
-                                                        type="number" step="0.1"
-                                                        className="w-14 text-center h-8 bg-slate-950 border-slate-700 text-slate-300 text-sm focus-visible:ring-orange-500/50 mx-auto"
-                                                        value={p.desi}
-                                                        onChange={(e) => handleProductChange(p.id, "desi", e.target.value)}
-                                                    />
-                                                </TableCell>
-                                                <TableCell className="text-center px-2">
-                                                    <Input
-                                                        type="number" step="0.01"
-                                                        className="w-16 text-center h-8 bg-slate-950 border-slate-700 text-slate-300 text-sm focus-visible:ring-orange-500/50 mx-auto"
-                                                        value={p.return_rate}
-                                                        onChange={(e) => handleProductChange(p.id, "return_rate", e.target.value)}
-                                                    />
-                                                </TableCell>
-                                                <TableCell className="px-2 text-center align-middle">
-                                                    <div className="flex items-center justify-center gap-2">
-                                                        <Switch
-                                                            checked={p.fast_delivery}
-                                                            onCheckedChange={() => toggleFastDelivery(p.id, p.fast_delivery)}
-                                                        />
-                                                        <span className={`text-[11px] font-medium ${p.fast_delivery ? 'text-green-400' : 'text-slate-500'}`}>
-                                                            {p.fast_delivery ? 'Açık' : 'Kapalı'}
-                                                        </span>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="text-right pr-4 px-2">
-                                                    <Button
-                                                        size="icon"
-                                                        onClick={() => saveProduct(p)}
-                                                        disabled={updatingProductId === p.id}
-                                                        className="h-8 w-8 bg-orange-500/10 text-orange-500 hover:bg-orange-500 hover:text-white border border-orange-500/20"
-                                                    >
-                                                        {updatingProductId === p.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                                                    </Button>
-                                                </TableCell>
-                                            </TableRow>
-
-                                            {/* Varyant Alt Satırları */}
-                                            {isExpanded && p.variants.map((v) => (
-                                                <TableRow key={`var-${v.id}`} className="bg-slate-900/40 hover:bg-slate-800/50 border-b border-slate-800/50 transition-colors">
-                                                    <TableCell className="relative px-2">
-                                                        <div className="absolute top-0 left-1/2 w-px h-full bg-slate-700 -translate-x-1/2"></div>
-                                                        <div className="absolute top-1/2 left-1/2 w-4 h-px bg-slate-700"></div>
                                                     </TableCell>
-                                                    <TableCell className="pl-6 py-2 px-2">
-                                                        <div className="flex items-center gap-2">
-                                                            <div className="text-[12px] text-slate-300 line-clamp-1 flex-1 font-medium bg-slate-800/50 py-1 px-2 rounded border border-slate-700/50">
-                                                                {(v.title || "").split(" - ").pop() || v.title || p.title}
-                                                            </div>
-                                                        </div>
-                                                    </TableCell>
-                                                    <TableCell className="px-2">
-                                                        <div className="flex items-center justify-center gap-1">
-                                                            <div className="border border-slate-700/80 rounded px-2 py-0.5 text-[11px] text-slate-400 bg-slate-900/80 font-mono tracking-wider">
-                                                                {v.barcode}
-                                                            </div>
-                                                            <button onClick={() => copyToClipboard(v.barcode)} className="text-slate-500 hover:text-orange-400">
-                                                                {copiedBarcode === v.barcode ? <CheckCircle2 size={14} className="text-green-500" /> : <Copy size={14} />}
-                                                            </button>
-                                                        </div>
-                                                    </TableCell>
-                                                    <TableCell className="px-2">
-                                                        <div className="flex items-center justify-center gap-1">
-                                                            <Input
-                                                                type="number" step="0.01"
-                                                                className="w-20 text-center h-7 bg-slate-950 border-slate-700/80 text-slate-300 text-xs focus-visible:ring-orange-500/50"
-                                                                value={v.cost_price}
-                                                                onChange={(e) => handleVariantChange(p.id, v.id, "cost_price", e.target.value)}
+                                                    <TableCell className="px-2 text-center align-middle">
+                                                        <div className="flex items-center justify-center gap-2">
+                                                            <Switch
+                                                                checked={master.fast_delivery}
+                                                                onCheckedChange={() => toggleFastDelivery(master.id, master.fast_delivery)}
                                                             />
+                                                            <span className={`text-[11px] font-medium ${master.fast_delivery ? 'text-green-400' : 'text-slate-500'}`}>
+                                                                {master.fast_delivery ? 'Açık' : 'Kapalı'}
+                                                            </span>
                                                         </div>
                                                     </TableCell>
-                                                    <TableCell className="px-2">
-                                                        <div className="flex justify-center">
-                                                            <Input
-                                                                type="number"
-                                                                className="w-14 text-center h-7 bg-slate-950 border-slate-700/80 text-slate-400 text-xs focus-visible:ring-orange-500/50"
-                                                                value={v.cost_vat_rate}
-                                                                onChange={(e) => handleVariantChange(p.id, v.id, "cost_vat_rate", e.target.value)}
-                                                            />
-                                                        </div>
-                                                    </TableCell>
-                                                    <TableCell className="px-2">
-                                                        <div className="flex justify-center">
-                                                            <Input
-                                                                type="number" step="0.1"
-                                                                className="w-14 text-center h-7 bg-slate-950 border-slate-700/80 text-slate-400 text-xs focus-visible:ring-orange-500/50"
-                                                                value={v.desi || ''}
-                                                                placeholder={p.desi}
-                                                                onChange={(e) => handleVariantChange(p.id, v.id, "desi", e.target.value)}
-                                                            />
-                                                        </div>
-                                                    </TableCell>
-                                                    <TableCell className="text-center text-slate-600">---</TableCell>
-                                                    <TableCell className="text-center text-slate-600">---</TableCell>
                                                     <TableCell className="text-right pr-4 px-2">
                                                         <Button
                                                             size="icon"
-                                                            onClick={() => saveVariant(v)}
-                                                            disabled={updatingVariantId === v.id}
-                                                            className="h-7 w-7 bg-transparent border border-slate-700 text-slate-400 hover:bg-slate-800 hover:text-white"
+                                                            onClick={() => saveProduct(master)}
+                                                            disabled={updatingProductId === master.id}
+                                                            className="h-8 w-8 bg-orange-500/10 text-orange-500 hover:bg-orange-500 hover:text-white border border-orange-500/20"
                                                         >
-                                                            {updatingVariantId === v.id ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                                                            {updatingProductId === master.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                                                         </Button>
                                                     </TableCell>
                                                 </TableRow>
-                                            ))}
-                                        </>
-                                    );
-                                })
+
+                                                {/* Variants */}
+                                                {isExpanded && children.map(child => (
+                                                    child.variants.map((v) => (
+                                                        <TableRow key={`var-${v.id}`} className="bg-slate-900/40 hover:bg-slate-800/50 border-b border-slate-800/50 transition-colors">
+                                                            <TableCell className="relative px-2">
+                                                                <div className="absolute top-0 left-1/2 w-px h-full bg-slate-700 -translate-x-1/2"></div>
+                                                                <div className="absolute top-1/2 left-1/2 w-4 h-px bg-slate-700"></div>
+                                                            </TableCell>
+                                                            <TableCell className="px-2 max-w-[280px]">
+                                                                <div className="flex items-center gap-3 pl-6">
+                                                                    <div className="w-8 h-8 rounded shrink-0 overflow-hidden relative border border-slate-700 bg-slate-800">
+                                                                        {child.image_url ? (
+                                                                            <Image src={child.image_url} alt={child.title} fill className="object-cover" />
+                                                                        ) : (
+                                                                            <Package className="w-4 h-4 text-slate-600 absolute inset-0 m-auto" />
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="min-w-0 flex-1">
+                                                                        <div className="font-medium text-slate-300 text-[12px] truncate line-clamp-2 leading-tight" title={child.title}>{child.title}</div>
+                                                                    </div>
+                                                                </div>
+                                                            </TableCell>
+                                                            <TableCell className="text-center px-2">
+                                                                <div className="flex items-center justify-center gap-2 mx-auto">
+                                                                    <span className="font-mono text-[12px] text-slate-300 bg-slate-800 px-2 py-1 rounded border border-slate-700 w-full truncate cursor-pointer hover:bg-slate-700 transition-colors" title="Büyütüp kopyalamak için tıklayın" onClick={() => copyToClipboard(v.barcode)}>
+                                                                        {v.barcode}
+                                                                    </span>
+                                                                    <button
+                                                                        onClick={() => copyToClipboard(v.barcode)}
+                                                                        className={`shrink-0 p-1.5 rounded-md transition-colors ${copiedBarcode === v.barcode ? 'bg-green-500/20 text-green-400' : 'bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700'} border border-slate-700`}
+                                                                        title="Barkodu Kopyala"
+                                                                    >
+                                                                        {copiedBarcode === v.barcode ? <Check size={14} /> : <Copy size={14} />}
+                                                                    </button>
+                                                                </div>
+                                                            </TableCell>
+                                                            <TableCell className="px-2">
+                                                                <div className="flex items-center justify-center gap-2">
+                                                                    <Input
+                                                                        type="number" step="0.01"
+                                                                        className="w-20 text-center h-8 bg-slate-950 border-orange-500/50 text-orange-50 text-sm focus-visible:ring-orange-500/50 placeholder:text-slate-600"
+                                                                        placeholder="Maliyet"
+                                                                        value={v.cost_price}
+                                                                        onChange={(e) => handleVariantChange(child.id, v.id, "cost_price", e.target.value)}
+                                                                    />
+                                                                    <span className="text-slate-500 text-xs font-medium">TRY</span>
+                                                                </div>
+                                                            </TableCell>
+                                                            <TableCell className="px-2">
+                                                                <div className="flex justify-center">
+                                                                    <Input
+                                                                        type="number" step="1"
+                                                                        className="w-16 text-center h-8 bg-slate-950 border-slate-700 text-slate-300 text-sm focus-visible:ring-orange-500/50"
+                                                                        value={v.cost_vat_rate}
+                                                                        onChange={(e) => handleVariantChange(child.id, v.id, "cost_vat_rate", e.target.value)}
+                                                                    />
+                                                                </div>
+                                                            </TableCell>
+                                                            <TableCell className="px-2 text-center text-slate-500 relative">
+                                                                <div className="flex justify-center">
+                                                                    <Input
+                                                                        type="number" step="0.1"
+                                                                        className="w-14 text-center h-8 bg-slate-950 border-slate-700 text-slate-300 text-sm focus-visible:ring-orange-500/50"
+                                                                        value={v.desi || child.desi}
+                                                                        onChange={(e) => handleVariantChange(child.id, v.id, "desi", e.target.value)}
+                                                                    />
+                                                                </div>
+                                                            </TableCell>
+                                                            <TableCell className="text-center text-slate-600">---</TableCell>
+                                                            <TableCell className="text-center text-slate-600">---</TableCell>
+                                                            <TableCell className="text-right pr-4 px-2">
+                                                                <Button
+                                                                    size="icon"
+                                                                    onClick={async () => {
+                                                                        await saveVariant(v);
+                                                                    }}
+                                                                    disabled={updatingVariantId === v.id}
+                                                                    className="h-8 w-8 bg-orange-500/10 text-orange-500 hover:bg-orange-500 hover:text-white border border-orange-500/20"
+                                                                >
+                                                                    {updatingVariantId === v.id ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                                                                </Button>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    ))
+                                                ))}
+                                            </React.Fragment>
+                                        );
+                                    });
+                                })()
                             )}
                         </TableBody>
                     </Table>
+                </div>
+
+                {/* Pagination Controls */}
+                <div className="p-4 border-t border-slate-800 flex items-center justify-between bg-slate-900/50">
+                    <div className="text-sm text-slate-400">
+                        Toplam <span className="font-semibold text-slate-200">{totalCount}</span> üründen <span className="font-semibold text-slate-200">{totalCount > 0 ? (page - 1) * 50 + 1 : 0}-{Math.min(page * 50, totalCount)}</span> arası gösteriliyor.
+                    </div>
+                    <div className="flex gap-2">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={page === 1}
+                            onClick={() => setPage(page - 1)}
+                            className="border-slate-700 bg-slate-800 text-slate-300 hover:text-white"
+                        >
+                            Önceki
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={page * 50 >= totalCount}
+                            onClick={() => setPage(page + 1)}
+                            className="border-slate-700 bg-slate-800 text-slate-300 hover:text-white"
+                        >
+                            Sonraki
+                        </Button>
+                    </div>
                 </div>
             </div>
         </div>

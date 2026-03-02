@@ -70,14 +70,18 @@ export default function SettingsPage() {
         });
         success = true;
       } else {
+        const msg = result.message || "Trendyol API'ye bağlanılamadı.";
+        const serverIp = result.server_ip ? ` (IP: ${result.server_ip})` : "";
         toast.error("Bağlantı Başarısız", {
-          description: result.message || "Trendyol API'ye bağlanılamadı."
+          description: `${msg}${serverIp}`,
+          duration: 10000,
         });
       }
     } catch (error: any) {
       console.error("Test connection error:", error);
       toast.error("Bağlantı Hatası", {
-        description: error.message || "API test edilirken sunucu hatası oluştu."
+        description: error.message || "API test edilirken sunucu hatası oluştu.",
+        duration: 10000,
       });
     } finally {
       setIsTesting(false);
@@ -96,21 +100,20 @@ export default function SettingsPage() {
     setIsSaving(true);
 
     try {
-      // Step 1: Enforce API Connection Test if tokens are provided
+      // Step 1: Test connection if tokens are provided
       if (apiKey || apiSecret) {
         toast.loading("Bağlantı test ediliyor...", { id: "save-toast" });
         const isConnectionOk = await handleTestConnection();
         if (!isConnectionOk) {
-          toast.dismiss("save-toast");
-          setIsSaving(false);
-          return; // Durdur, test başarısızsa kaydetme
+          // Allow saving even if test fails — credentials may be correct but IP not whitelisted
+          toast.loading("Test başarısız, ama bilgiler yine de kaydediliyor...", { id: "save-toast" });
+        } else {
+          toast.loading("Bilgiler şifrelenip kaydediliyor...", { id: "save-toast" });
         }
-        toast.loading("Bilgiler şifrelenip kaydediliyor...", { id: "save-toast" });
       } else {
         toast.loading("Ayarlar güncelleniyor...", { id: "save-toast" });
       }
 
-      // Step 2: Save to DB securely
       const saveResponse: any = await api.post("/integrations/trendyol/save-credentials/", {
         api_key: apiKey,
         api_secret: apiSecret,
@@ -118,10 +121,20 @@ export default function SettingsPage() {
         auto_sync: true
       });
 
-      toast.success("Ayarlar Kaydedildi", {
-        id: "save-toast",
-        description: saveResponse.message || "Bilgileriniz güvenli bir şekilde sunucuda saklandı."
-      });
+      // Show appropriate message based on sync result
+      const syncResult = saveResponse.sync_result || "";
+      if (syncResult.startsWith("sync_failed") || syncResult.startsWith("sync_error")) {
+        toast.warning("Bilgiler Kaydedildi — Senkronizasyon Bekliyor", {
+          id: "save-toast",
+          description: "API bilgileri güvenli şekilde kaydedildi. Ancak veri çekme Cloudflare tarafından engellendi. Trendyol'da IP whitelist'ini kontrol edin.",
+          duration: 10000,
+        });
+      } else {
+        toast.success("Ayarlar Kaydedildi", {
+          id: "save-toast",
+          description: saveResponse.message || "Bilgileriniz güvenli bir şekilde sunucuda saklandı."
+        });
+      }
 
     } catch (error: any) {
       console.error("Save credentials error:", error);

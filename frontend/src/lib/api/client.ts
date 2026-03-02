@@ -1,10 +1,24 @@
 // Simple internal API wrapper pointing to Django
-// Assumes Next.js Rewrites or direct backend URL. In current setup it's usually defined by NEXT_PUBLIC_API_URL or '/api'.
+// Uses dynamic base URL to support LAN access (same as api.ts)
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+const getApiBase = () => {
+    if (typeof window !== "undefined") {
+        return `${window.location.protocol}//${window.location.hostname}:8000/api`;
+    }
+    return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+};
+
+const API_BASE_URL = getApiBase();
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<{ ok: boolean, data: T, message?: string }> {
-    const url = endpoint.startsWith('http') ? endpoint : `${API_BASE_URL}${endpoint}`;
+    // Ensure trailing slash before query string (Django APPEND_SLASH)
+    let cleanEndpoint = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
+    const [pathPart, queryPart] = cleanEndpoint.split('?');
+    if (!pathPart.endsWith('/')) {
+        cleanEndpoint = pathPart + '/' + (queryPart ? '?' + queryPart : '');
+    }
+
+    const url = `${API_BASE_URL}${cleanEndpoint}`;
 
     // Attempt to get token if it's stored
     let token = '';
@@ -38,6 +52,10 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
         }
 
         if (!response.ok) {
+            if (response.status === 401 && !cleanEndpoint.includes("/auth/")) {
+                localStorage.removeItem("access_token");
+                window.location.href = "/giris";
+            }
             throw new Error(data.message || data.error || `HTTP error! status: ${response.status}`);
         }
 

@@ -4,7 +4,8 @@ from .views import (
     DashboardOverviewView, MockReportsView, TriggerSyncView,
     ProductListView, OrderListView, ProductAnalysisView,
     TrendyolTestConnectionView, TrendyolSaveCredentialsView,
-    CategoryAnalysisView, ReturnAnalysisView,
+    CategoryAnalysisView, ReturnAnalysisView, AdsAnalysisView,
+    ProductExcelExportView, ProductExcelImportView,
 )
 
 urlpatterns = [
@@ -21,11 +22,14 @@ urlpatterns = [
     path("integrations/trendyol/test-connection/", TrendyolTestConnectionView.as_view(), name="trendyol-test-conn"),
     path("integrations/trendyol/save-credentials/", TrendyolSaveCredentialsView.as_view(), name="trendyol-save-cred"),
     path("products/", ProductListView.as_view(), name="product-list"),
+    path("products/export-excel/", ProductExcelExportView.as_view(), name="product-export-excel"),
+    path("products/import-excel/", ProductExcelImportView.as_view(), name="product-import-excel"),
     path("orders/", OrderListView.as_view(), name="order-list"),
     
     # Reports — specific endpoints first, then catch-all mock
     path("reports/product-analysis/", ProductAnalysisView.as_view(), name="product-analysis"),
     path("reports/categories/", CategoryAnalysisView.as_view(), name="category-analysis"),
     path("reports/returns/", ReturnAnalysisView.as_view(), name="return-analysis"),
+    path("reports/ads/", AdsAnalysisView.as_view(), name="ads-analysis"),
     path("reports/<str:report_type>/", MockReportsView.as_view(), name="reports-mock"),
 ]

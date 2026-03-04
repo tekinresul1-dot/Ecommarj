@@ -101,15 +101,13 @@ class TrendyolAdapter:
         """Trendyol'dan sipariş listesini çeker."""
         url = f"{self.BASE_URL}/order/sellers/{self.seller_id}/orders"
 
-        params = {"size": 50}
+        params = {"size": 200}
         if start_date_ms:
             params["startDate"] = start_date_ms
         if end_date_ms:
             params["endDate"] = end_date_ms
         if status:
             params["status"] = status
-        params["orderByField"] = "PackageLastModifiedDate"
-        params["orderByDirection"] = "DESC"
 
         all_content = []
         page = 0

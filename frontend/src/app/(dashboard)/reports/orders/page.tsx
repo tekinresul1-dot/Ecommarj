@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { formatCurrency, formatPercentage } from "@/lib/utils/format";
 import apiClient from "@/lib/api/client";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ChevronDown, Filter, Download } from "lucide-react";
+import { ChevronDown, Filter, Download, ShoppingBag, Package, AlertCircle, FileText } from "lucide-react";
 import clsx from "clsx";
 
 interface OrderBreakdown {
@@ -28,6 +28,7 @@ interface OrderItem {
   quantity: number;
   sale_price_gross: string;
   commission_rate: string;
+  image_url?: string;
 }
 
 interface Order {
@@ -68,7 +69,15 @@ export default function OrderProfitabilityPage() {
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-white tracking-tight">Sipariş Kârlılık Analizi</h1>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/20">
+            <ShoppingBag className="w-5 h-5 text-blue-400" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-white tracking-tight">Sipariş Kârlılık Analizi</h1>
+            <p className="text-xs text-white/40 mt-0.5">Siparişlerinizin detaylı kârlılık hesapları</p>
+          </div>
+        </div>
         <div className="flex gap-3">
           <button className="flex items-center gap-2 bg-navy-800 hover:bg-navy-700 text-white/90 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-white/5">
             <Filter className="w-4 h-4" />
@@ -86,13 +95,13 @@ export default function OrderProfitabilityPage() {
           <table className="w-full text-left text-sm text-white/80">
             <thead className="bg-navy-800/50 text-white border-b border-light-navy uppercase text-[10px] tracking-wider font-semibold">
               <tr>
-                <th className="px-6 py-4 whitespace-nowrap">Sipariş Numarası</th>
-                <th className="px-6 py-4 whitespace-nowrap">Sipariş Tarihi</th>
-                <th className="px-6 py-4 whitespace-nowrap">Sipariş Tutarı (₺)</th>
-                <th className="px-6 py-4 whitespace-nowrap">Kâr Tutarı (₺)</th>
-                <th className="px-6 py-4 whitespace-nowrap">Kâr Oranı (%)</th>
-                <th className="px-6 py-4 whitespace-nowrap">Kâr Marjı (%)</th>
-                <th className="px-6 py-4 text-center whitespace-nowrap">Detay Bilgiler</th>
+                <th className="px-5 py-4 whitespace-nowrap">Sipariş Numarası</th>
+                <th className="px-5 py-4 whitespace-nowrap">Sipariş Tarihi</th>
+                <th className="px-5 py-4 whitespace-nowrap text-right">Sipariş Tutarı (₺)</th>
+                <th className="px-5 py-4 whitespace-nowrap text-right">Kâr Tutarı (₺)</th>
+                <th className="px-5 py-4 whitespace-nowrap text-right">Kâr Oranı (%)</th>
+                <th className="px-5 py-4 whitespace-nowrap text-right">Kâr Marjı (%)</th>
+                <th className="px-5 py-4 text-center whitespace-nowrap">Detay</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
@@ -118,25 +127,25 @@ export default function OrderProfitabilityPage() {
                   const isLoss = profitVal < 0;
 
                   return (
-                    <tr key={order.id} className="hover:bg-white/5 transition-colors group">
-                      <td className="px-6 py-4 whitespace-nowrap font-medium text-blue-400">
+                    <tr key={order.id} className="hover:bg-white/5 transition-colors group cursor-pointer" onClick={() => setSelectedOrder(order)}>
+                      <td className="px-5 py-4 whitespace-nowrap font-medium text-blue-400">
                         {order.order_number}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-5 py-4 whitespace-nowrap text-white/60">
                         {order.order_date || "-"}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-red-400 font-medium">
+                      <td className="px-5 py-4 whitespace-nowrap text-right font-medium text-white/80">
                         {formatCurrency(parseFloat(order.total_gross))}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-5 py-4 whitespace-nowrap text-right">
                         <span className={clsx(
-                          "font-medium",
+                          "font-bold",
                           isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80"
                         )}>
                           {formatCurrency(profitVal)}
                         </span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-5 py-4 whitespace-nowrap text-right">
                         <span className={clsx(
                           "font-medium",
                           isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80"
@@ -144,7 +153,7 @@ export default function OrderProfitabilityPage() {
                           {formatPercentage(parseFloat(order.profit_on_cost))}
                         </span>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-5 py-4 whitespace-nowrap text-right">
                         <span className={clsx(
                           "font-medium",
                           isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80"
@@ -152,10 +161,10 @@ export default function OrderProfitabilityPage() {
                           {formatPercentage(parseFloat(order.profit_margin))}
                         </span>
                       </td>
-                      <td className="px-6 py-4 text-center whitespace-nowrap">
+                      <td className="px-5 py-4 text-center whitespace-nowrap">
                         <button
-                          onClick={() => setSelectedOrder(order)}
-                          className="bg-navy-800 hover:bg-navy-700 text-white/90 text-xs px-4 py-2 rounded-md transition-colors border border-white/10"
+                          onClick={(e) => { e.stopPropagation(); setSelectedOrder(order); }}
+                          className="bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 text-xs px-4 py-2 rounded-lg transition-colors border border-blue-500/20 font-medium"
                         >
                           Detaylar
                         </button>
@@ -175,121 +184,173 @@ export default function OrderProfitabilityPage() {
 }
 
 function OrderDetailsModal({ order, onClose }: { order: Order | null, onClose: () => void }) {
+  const [kdvOpen, setKdvOpen] = useState(false);
+
   if (!order) return null;
 
-  // Detailed panel matches screenshot 2
+  const profitVal = parseFloat(order.total_profit);
+  const isProfitable = profitVal > 0;
+
   return (
     <Dialog open={!!order} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-4xl bg-navy-950 border-white/10 text-white p-0 overflow-hidden">
-        <div className="p-6 border-b border-white/10 flex items-center gap-4 bg-navy-900/50">
-          <div className="w-12 h-12 rounded-full bg-blue-500/20 flex items-center justify-center border border-blue-500/30">
-            <ShoppingBag className="w-6 h-6 text-blue-400" />
-          </div>
-          <div>
-            <DialogTitle className="text-xl font-bold">Sipariş Analizi</DialogTitle>
-            <p className="text-sm text-white/60">#{order.order_number} • {order.order_date}</p>
+      <DialogContent className="max-w-5xl bg-navy-950 border-white/10 text-white p-0 overflow-hidden">
+        {/* Header */}
+        <div className="p-6 border-b border-white/10 bg-gradient-to-r from-navy-900 to-navy-950">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500/20 to-indigo-500/20 flex items-center justify-center border border-blue-500/30">
+              <ShoppingBag className="w-7 h-7 text-blue-400" />
+            </div>
+            <div className="flex-1">
+              <DialogTitle className="text-xl font-bold tracking-tight">Sipariş Detayı</DialogTitle>
+              <div className="flex items-center gap-3 mt-1.5">
+                <span className="text-sm text-white/50">#{order.order_number}</span>
+                <span className="text-xs text-white/30">•</span>
+                <span className="text-sm text-white/50">{order.order_date}</span>
+                <span className={clsx(
+                  "text-xs px-2.5 py-0.5 rounded-full font-medium border",
+                  order.status === "Delivered" ? "bg-green-500/10 text-green-400 border-green-500/20" :
+                    order.status === "Shipped" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
+                      order.status === "Cancelled" || order.status === "Returned" ? "bg-red-500/10 text-red-400 border-red-500/20" :
+                        "bg-yellow-500/10 text-yellow-400 border-yellow-500/20"
+                )}>
+                  {order.status}
+                </span>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-white/40 font-medium uppercase tracking-wider mb-1">Net Kâr</p>
+              <p className={clsx("text-2xl font-bold", isProfitable ? "text-green-400" : "text-red-400")}>
+                {formatCurrency(profitVal)}
+              </p>
+            </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-6 max-h-[70vh] overflow-y-auto">
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-0 max-h-[65vh] overflow-y-auto">
 
-          {/* Items Column */}
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-semibold text-white/90 flex items-center gap-2">
+          {/* Items Column (3/5) */}
+          <div className="lg:col-span-3 p-6 border-r border-white/5">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="font-semibold text-white/90 flex items-center gap-2 text-sm">
                 <Package className="w-4 h-4 text-orange-400" />
                 Siparişteki Ürünler
               </h3>
-              <span className="bg-orange-500/20 text-orange-400 text-xs px-2 py-1 rounded-full font-medium border border-orange-500/20">
+              <span className="bg-orange-500/10 text-orange-400 text-xs px-3 py-1 rounded-full font-semibold border border-orange-500/20">
                 {order.items.length} Kalem
               </span>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-3">
               {order.items.map((item, idx) => (
-                <div key={idx} className="bg-navy-900 border border-white/5 rounded-xl p-4 flex gap-4 items-start">
-                  <div className="w-20 h-24 bg-navy-800 rounded-lg flex-shrink-0 border border-white/10">
-                    {/* Mock Image Placeholder */}
+                <div key={idx} className="bg-navy-900/80 border border-white/5 rounded-xl p-4 flex gap-4 items-start hover:border-white/10 transition-colors">
+                  <div className="w-16 h-20 bg-navy-800 rounded-lg flex-shrink-0 border border-white/10 overflow-hidden">
+                    {item.image_url ? (
+                      <img src={item.image_url} alt={item.title} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <Package className="w-6 h-6 text-white/20" />
+                      </div>
+                    )}
                   </div>
-                  <div className="flex-1">
-                    <h4 className="font-medium text-sm text-white/90 leading-snug mb-2">{item.title}</h4>
-                    <p className="text-xs text-white/60 mb-1">Barkod: <span className="text-orange-400 font-medium">{item.barcode}</span></p>
-                    <p className="text-xs text-white/60 mb-1">Komisyon Oranı: <span className="text-orange-400 font-medium">%{item.commission_rate}</span></p>
-                    <div className="text-right mt-2">
-                      <span className="text-red-400 font-bold text-lg">{formatCurrency(parseFloat(item.sale_price_gross))}</span>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-medium text-sm text-white/90 leading-snug mb-2 line-clamp-2">{item.title}</h4>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                      <span className="text-white/50">Barkod: <span className="text-orange-400 font-medium">{item.barcode}</span></span>
+                      <span className="text-white/50">Adet: <span className="text-white/80 font-medium">{item.quantity}</span></span>
+                      <span className="text-white/50">Komisyon: <span className="text-purple-400 font-medium">%{parseFloat(item.commission_rate).toFixed(2)}</span></span>
                     </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-lg font-bold text-white">{formatCurrency(parseFloat(item.sale_price_gross))}</p>
+                    <p className="text-[10px] text-white/40 mt-0.5">Satış Tutarı</p>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Expenses Column */}
-          <div>
-            <h3 className="font-semibold text-white/90 flex items-center gap-2 mb-4">
+          {/* Expenses Column (2/5) */}
+          <div className="lg:col-span-2 p-6 bg-navy-900/20">
+            <h3 className="font-semibold text-white/90 flex items-center gap-2 mb-5 text-sm">
               <AlertCircle className="w-4 h-4 text-red-400" />
               Gider Kalemleri
             </h3>
 
-            <div className="space-y-3">
-              <ExpenseRow label="Kargo Ücreti" amount={parseFloat(order.aggregated_breakdown.shipping_fee)} />
+            <div className="space-y-2.5">
+              <ExpenseRow label="Ürün Maliyeti" amount={parseFloat(order.aggregated_breakdown.product_cost)} icon="💰" />
+              <ExpenseRow label="Komisyon Tutarı" amount={parseFloat(order.aggregated_breakdown.commission)} icon="🏷️" />
+              <ExpenseRow label="Kargo Ücreti" amount={parseFloat(order.aggregated_breakdown.shipping_fee)} icon="📦" />
+              <ExpenseRow label="Hizmet Bedeli" amount={parseFloat(order.aggregated_breakdown.service_fee)} icon="🧾" />
 
-              {/* Nested KDV Row */}
+              {/* Collapsible KDV Section */}
               <div className="bg-navy-900 border border-white/5 rounded-xl overflow-hidden">
-                <div className="p-4 flex justify-between items-center cursor-pointer hover:bg-white/5">
+                <button
+                  onClick={() => setKdvOpen(!kdvOpen)}
+                  className="w-full p-3.5 flex justify-between items-center hover:bg-white/5 transition-colors"
+                >
                   <div className="flex items-center gap-2">
-                    <ChevronDown className="w-4 h-4 text-white/40" />
-                    <span className="font-medium text-white/80">Net KDV</span>
+                    <ChevronDown className={clsx("w-4 h-4 text-white/40 transition-transform", kdvOpen && "rotate-180")} />
+                    <span className="font-medium text-white/80 text-sm">Net KDV</span>
                   </div>
-                  <span className="font-semibold text-red-400">-{formatCurrency(parseFloat(order.aggregated_breakdown.net_kdv))}</span>
+                  <span className="font-bold text-red-400 text-sm">-{formatCurrency(parseFloat(order.aggregated_breakdown.net_kdv))}</span>
+                </button>
+                {kdvOpen && (
+                  <div className="px-4 pb-3 space-y-2 border-t border-white/5 bg-navy-800/30">
+                    <KdvRow label="Satış KDV" amount={order.aggregated_breakdown.satis_kdv} />
+                    <KdvRow label="Maliyet KDV" amount={order.aggregated_breakdown.alis_kdv} />
+                    <KdvRow label="Komisyon KDV" amount={order.aggregated_breakdown.komisyon_kdv} />
+                    <KdvRow label="Kargo Ücreti KDV" amount={order.aggregated_breakdown.kargo_kdv} />
+                    <KdvRow label="Hizmet Bedeli KDV" amount={order.aggregated_breakdown.hizmet_bedeli_kdv} />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Profit Summary */}
+            <div className="mt-6 pt-4 border-t border-white/10">
+              <div className="space-y-2">
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-white/50">Toplam Ciro</span>
+                  <span className="font-semibold text-white">{formatCurrency(parseFloat(order.total_gross))}</span>
                 </div>
-                <div className="px-4 pb-4 pt-1 space-y-3 border-t border-white/5 bg-navy-800/20 text-sm">
-                  <div className="flex justify-between items-center text-white/60">
-                    <span>Satış KDV</span>
-                    <span className="text-orange-400">{formatCurrency(parseFloat(order.aggregated_breakdown.satis_kdv))}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-white/60">
-                    <span>Maliyet KDV</span>
-                    <span className="text-white/80">{formatCurrency(parseFloat(order.aggregated_breakdown.alis_kdv))}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-white/60">
-                    <span>Komisyon KDV</span>
-                    <span className="text-white/80">{formatCurrency(parseFloat(order.aggregated_breakdown.komisyon_kdv))}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-white/60">
-                    <span>Kargo Ücreti KDV</span>
-                    <span className="text-white/80">{formatCurrency(parseFloat(order.aggregated_breakdown.kargo_kdv))}</span>
-                  </div>
-                  <div className="flex justify-between items-center text-white/60">
-                    <span>Hizmet Bedeli KDV</span>
-                    <span className="text-white/80">{formatCurrency(parseFloat(order.aggregated_breakdown.hizmet_bedeli_kdv))}</span>
-                  </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-white/50">Net Kâr</span>
+                  <span className={clsx("font-bold text-lg", isProfitable ? "text-green-400" : "text-red-400")}>
+                    {formatCurrency(profitVal)}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-white/50">Kâr Marjı</span>
+                  <span className={clsx("font-semibold", isProfitable ? "text-green-400" : "text-red-400")}>
+                    {formatPercentage(parseFloat(order.profit_margin))}
+                  </span>
                 </div>
               </div>
-
-              <ExpenseRow label="Ürün Maliyeti" amount={parseFloat(order.aggregated_breakdown.product_cost)} />
-              <ExpenseRow label="Komisyon Tutarı" amount={parseFloat(order.aggregated_breakdown.commission)} />
-              <ExpenseRow label="Hizmet Bedeli" amount={parseFloat(order.aggregated_breakdown.service_fee)} />
             </div>
           </div>
-
         </div>
       </DialogContent>
     </Dialog>
   );
 }
 
-function ExpenseRow({ label, amount }: { label: string, amount: number }) {
+function ExpenseRow({ label, amount, icon }: { label: string; amount: number; icon: string }) {
   return (
-    <div className="bg-navy-900 border border-white/5 rounded-xl p-4 flex justify-between items-center hover:bg-white/5 transition-colors">
-      <span className="font-medium text-white/80 flex items-center gap-2">
-        <FileText className="w-4 h-4 text-white/40" />
+    <div className="bg-navy-900 border border-white/5 rounded-xl p-3.5 flex justify-between items-center hover:bg-white/5 transition-colors">
+      <span className="font-medium text-white/70 flex items-center gap-2 text-sm">
+        <span className="text-base">{icon}</span>
         {label}
       </span>
-      <span className="font-semibold text-orange-400">{formatCurrency(amount)}</span>
+      <span className="font-bold text-orange-400 text-sm">{formatCurrency(amount)}</span>
     </div>
   );
 }
 
-// Ensure icons are imported
-import { ShoppingBag, Package, AlertCircle, FileText } from "lucide-react";
+function KdvRow({ label, amount }: { label: string; amount: string }) {
+  return (
+    <div className="flex justify-between items-center text-xs text-white/60 pt-1.5">
+      <span>{label}</span>
+      <span className="text-white/80 font-medium">{formatCurrency(parseFloat(amount))}</span>
+    </div>
+  );
+}

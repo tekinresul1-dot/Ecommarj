@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { formatCurrency, formatPercentage } from "@/lib/utils/format";
 import apiClient from "@/lib/api/client";
-import { Filter, Download, Layers } from "lucide-react";
+import { Filter, Download, Layers, Calendar } from "lucide-react";
 import clsx from "clsx";
 
 interface CategoryAnalysis {
@@ -21,14 +21,21 @@ interface CategoryAnalysis {
 export default function CategoryAnalysisPage() {
   const [categories, setCategories] = useState<CategoryAnalysis[]>([]);
   const [loading, setLoading] = useState(true);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
 
   useEffect(() => {
     fetchCategories();
   }, []);
 
-  const fetchCategories = async () => {
+  const fetchCategories = async (minDate?: string, maxDate?: string) => {
+    setLoading(true);
     try {
-      const result = await apiClient.get<CategoryAnalysis[]>("/reports/categories/");
+      let url = "/reports/categories/";
+      if (minDate && maxDate) {
+        url += `?min_date=${minDate}&max_date=${maxDate}`;
+      }
+      const result = await apiClient.get<CategoryAnalysis[]>(url);
       if (result.ok) {
         setCategories(result.data);
       }
@@ -39,10 +46,19 @@ export default function CategoryAnalysisPage() {
     }
   };
 
-  // Summary KPI'lar
+  const handleFilter = () => {
+    if (startDate && endDate) {
+      fetchCategories(startDate, endDate);
+    } else {
+      fetchCategories();
+    }
+  };
+
+  // Summary KPIs
   const totalSales = categories.reduce((s, c) => s + parseFloat(c.total_sales_amount), 0);
   const totalProfit = categories.reduce((s, c) => s + parseFloat(c.total_profit), 0);
   const totalSold = categories.reduce((s, c) => s + c.total_sold_quantity, 0);
+  const avgMargin = totalSales > 0 ? (totalProfit / totalSales * 100) : 0;
 
   return (
     <div className="p-6">
@@ -56,21 +72,39 @@ export default function CategoryAnalysisPage() {
             <p className="text-xs text-white/40 mt-0.5">Kategorilere göre satış ve kârlılık dağılımı</p>
           </div>
         </div>
-        <div className="flex gap-3">
-          <button className="flex items-center gap-2 bg-navy-800 hover:bg-navy-700 text-white/90 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-white/5">
-            <Filter className="w-4 h-4" />
-            Filtrele
-          </button>
-          <button className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-green-900/20">
-            <Download className="w-4 h-4" />
-            Raporu İndir
-          </button>
+      </div>
+
+      {/* Date Filter Bar */}
+      <div className="bg-navy-900 border border-white/5 rounded-xl p-4 mb-6 flex flex-wrap items-center gap-4">
+        <div className="flex items-center gap-2">
+          <Calendar className="w-4 h-4 text-white/40" />
+          <span className="text-sm text-white/50 font-medium">Tarih Aralığı:</span>
         </div>
+        <input
+          type="date"
+          value={startDate}
+          onChange={(e) => setStartDate(e.target.value)}
+          className="bg-navy-800 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 focus:outline-none focus:border-blue-500/50 transition-colors"
+        />
+        <span className="text-white/30">—</span>
+        <input
+          type="date"
+          value={endDate}
+          onChange={(e) => setEndDate(e.target.value)}
+          className="bg-navy-800 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 focus:outline-none focus:border-blue-500/50 transition-colors"
+        />
+        <button
+          onClick={handleFilter}
+          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+        >
+          <Filter className="w-4 h-4" />
+          Filtrele
+        </button>
       </div>
 
       {/* Summary Cards */}
       {!loading && categories.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
           <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
             <p className="text-xs text-white/50 font-medium mb-1">Toplam Satış</p>
             <p className="text-xl font-bold text-white">{formatCurrency(totalSales)}</p>
@@ -82,6 +116,10 @@ export default function CategoryAnalysisPage() {
           <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
             <p className="text-xs text-white/50 font-medium mb-1">Toplam Satılan Adet</p>
             <p className="text-xl font-bold text-blue-400">{totalSold.toLocaleString("tr-TR")}</p>
+          </div>
+          <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
+            <p className="text-xs text-white/50 font-medium mb-1">Ortalama Kâr Marjı</p>
+            <p className={clsx("text-xl font-bold", avgMargin >= 0 ? "text-green-400" : "text-red-400")}>{formatPercentage(avgMargin)}</p>
           </div>
         </div>
       )}

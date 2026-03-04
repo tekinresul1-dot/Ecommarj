@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { formatCurrency, formatPercentage } from "@/lib/utils/format";
 import apiClient from "@/lib/api/client";
-import { Filter, Download, RotateCcw, AlertTriangle, TrendingDown } from "lucide-react";
+import { Filter, Calendar, RotateCcw, AlertTriangle, TrendingDown, BarChart3 } from "lucide-react";
 import clsx from "clsx";
 
 interface ReturnSummary {
@@ -12,6 +12,7 @@ interface ReturnSummary {
   return_rate: string;
   total_return_cargo_loss: string;
   total_return_revenue_loss: string;
+  return_to_sales_ratio: string;
 }
 
 interface ReturnItem {
@@ -27,14 +28,21 @@ export default function ReturnAnalysisPage() {
   const [summary, setSummary] = useState<ReturnSummary | null>(null);
   const [items, setItems] = useState<ReturnItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
 
   useEffect(() => {
     fetchReturns();
   }, []);
 
-  const fetchReturns = async () => {
+  const fetchReturns = async (minDate?: string, maxDate?: string) => {
+    setLoading(true);
     try {
-      const result = await apiClient.get<{ summary: ReturnSummary; data: ReturnItem[] }>("/reports/returns/");
+      let url = "/reports/returns/";
+      if (minDate && maxDate) {
+        url += `?min_date=${minDate}&max_date=${maxDate}`;
+      }
+      const result = await apiClient.get<{ summary: ReturnSummary; data: ReturnItem[] }>(url);
       if (result.ok && result.data) {
         setSummary(result.data.summary || null);
         setItems(result.data.data || []);
@@ -43,6 +51,14 @@ export default function ReturnAnalysisPage() {
       console.error("Return analysis fetch error:", error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleFilter = () => {
+    if (startDate && endDate) {
+      fetchReturns(startDate, endDate);
+    } else {
+      fetchReturns();
     }
   };
 
@@ -58,21 +74,39 @@ export default function ReturnAnalysisPage() {
             <p className="text-xs text-white/40 mt-0.5">İade edilen siparişlerin kargo ve gelir kayıpları</p>
           </div>
         </div>
-        <div className="flex gap-3">
-          <button className="flex items-center gap-2 bg-navy-800 hover:bg-navy-700 text-white/90 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-white/5">
-            <Filter className="w-4 h-4" />
-            Filtrele
-          </button>
-          <button className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-green-900/20">
-            <Download className="w-4 h-4" />
-            Raporu İndir
-          </button>
+      </div>
+
+      {/* Date Filter Bar */}
+      <div className="bg-navy-900 border border-white/5 rounded-xl p-4 mb-6 flex flex-wrap items-center gap-4">
+        <div className="flex items-center gap-2">
+          <Calendar className="w-4 h-4 text-white/40" />
+          <span className="text-sm text-white/50 font-medium">Tarih Aralığı:</span>
         </div>
+        <input
+          type="date"
+          value={startDate}
+          onChange={(e) => setStartDate(e.target.value)}
+          className="bg-navy-800 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 focus:outline-none focus:border-red-500/50 transition-colors"
+        />
+        <span className="text-white/30">—</span>
+        <input
+          type="date"
+          value={endDate}
+          onChange={(e) => setEndDate(e.target.value)}
+          className="bg-navy-800 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 focus:outline-none focus:border-red-500/50 transition-colors"
+        />
+        <button
+          onClick={handleFilter}
+          className="flex items-center gap-2 bg-red-600 hover:bg-red-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+        >
+          <Filter className="w-4 h-4" />
+          Filtrele
+        </button>
       </div>
 
       {/* Summary Cards */}
       {!loading && summary && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
           <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
             <p className="text-xs text-white/50 font-medium mb-1">Toplam Sipariş</p>
             <p className="text-xl font-bold text-white">{summary.total_orders.toLocaleString("tr-TR")}</p>
@@ -80,25 +114,32 @@ export default function ReturnAnalysisPage() {
           <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-1">
               <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
-              <p className="text-xs text-white/50 font-medium">İade Edilen Sipariş</p>
+              <p className="text-xs text-white/50 font-medium">İade Sipariş Sayısı</p>
             </div>
             <p className="text-xl font-bold text-red-400">{summary.returned_orders.toLocaleString("tr-TR")}</p>
           </div>
           <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
-            <p className="text-xs text-white/50 font-medium mb-1">İade Oranı</p>
-            <p className={clsx(
-              "text-xl font-bold",
-              parseFloat(summary.return_rate) > 15 ? "text-red-400" : parseFloat(summary.return_rate) > 5 ? "text-yellow-400" : "text-green-400"
-            )}>
-              {formatPercentage(parseFloat(summary.return_rate))}
-            </p>
+            <p className="text-xs text-white/50 font-medium mb-1">Toplam İade Tutarı</p>
+            <p className="text-xl font-bold text-orange-400">{formatCurrency(parseFloat(summary.total_return_revenue_loss))}</p>
           </div>
           <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-1">
               <TrendingDown className="w-3.5 h-3.5 text-red-400" />
-              <p className="text-xs text-white/50 font-medium">Toplam Kargo Zararı</p>
+              <p className="text-xs text-white/50 font-medium">İade Kargo Zararı</p>
             </div>
             <p className="text-xl font-bold text-red-400">{formatCurrency(parseFloat(summary.total_return_cargo_loss))}</p>
+          </div>
+          <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-1">
+              <BarChart3 className="w-3.5 h-3.5 text-yellow-400" />
+              <p className="text-xs text-white/50 font-medium">İade / Satış Oranı</p>
+            </div>
+            <p className={clsx(
+              "text-xl font-bold",
+              parseFloat(summary.return_to_sales_ratio) > 15 ? "text-red-400" : parseFloat(summary.return_to_sales_ratio) > 5 ? "text-yellow-400" : "text-green-400"
+            )}>
+              {formatPercentage(parseFloat(summary.return_to_sales_ratio))}
+            </p>
           </div>
         </div>
       )}

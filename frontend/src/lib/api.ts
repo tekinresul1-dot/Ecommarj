@@ -10,11 +10,12 @@ const getApiBase = () => {
 
 const API_BASE = getApiBase();
 
-const getHeaders = () => {
+const getHeaders = (endpoint?: string) => {
     const token = localStorage.getItem("access_token");
+    const isPublicAuthEndpoint = endpoint && (endpoint.includes('/auth/login') || endpoint.includes('/auth/register'));
     return {
         "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(token && !isPublicAuthEndpoint ? { Authorization: `Bearer ${token}` } : {}),
     };
 };
 
@@ -27,7 +28,7 @@ export const api = {
         }
         console.log("API_BASE:", API_BASE, "endpoint:", cleanEndpoint);
         const res = await fetch(`${API_BASE}${cleanEndpoint}`, {
-            headers: getHeaders(),
+            headers: getHeaders(cleanEndpoint),
         });
 
         if (!res.ok) {
@@ -54,7 +55,7 @@ export const api = {
         }
         const res = await fetch(`${API_BASE}${cleanEndpoint}`, {
             method: "POST",
-            headers: getHeaders(),
+            headers: getHeaders(cleanEndpoint),
             body: JSON.stringify(data),
         });
 
@@ -111,7 +112,7 @@ export const api = {
         }
         const res = await fetch(`${API_BASE}${cleanEndpoint}`, {
             method: "PATCH",
-            headers: getHeaders(),
+            headers: getHeaders(cleanEndpoint),
             body: JSON.stringify(data),
         });
 

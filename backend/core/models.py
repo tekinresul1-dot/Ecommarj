@@ -122,6 +122,7 @@ class Product(TimestampedModel):
     brand = models.CharField("Marka", max_length=255, blank=True, default="")
     return_rate = models.DecimalField("İade Oranı (%)", max_digits=5, decimal_places=2, default=0)
     fast_delivery = models.BooleanField("Bugün Kargoda", default=False)
+    trendyol_created_at = models.DateTimeField("Trendyol Yüklenme Tarihi", null=True, blank=True, db_index=True)
     
     is_active = models.BooleanField("Aktif mi?", default=True)
 
@@ -188,6 +189,7 @@ class Order(TimestampedModel):
     class Meta:
         verbose_name = "Sipariş"
         verbose_name_plural = "Siparişler"
+        unique_together = [("organization", "marketplace_order_id")]
 
     def __str__(self):
         return f"Order #{self.marketplace_order_id}"

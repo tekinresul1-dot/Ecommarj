@@ -60,72 +60,95 @@ class ProfitCalculator:
         commission_rate: Decimal,
         vat_rate: Decimal,
         service_fee: Decimal = Decimal("13.19"), # Excel'den default
+        is_micro_export: bool = False,
+        sale_price_net: Decimal = None,
+        is_returned: bool = False,
     ) -> Dict[str, Any]:
         """
         Ham verilerden (Satış, Kargo, Komisyon, KDV oranları) net kârlılığı Excel mantığıyla hesaplar.
         Tüm fiyatlar KDV dahil (Gross) girilmelidir.
         """
         from decimal import ROUND_HALF_UP
-
+        
         def q(val: Decimal):
             return val.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+        # İndirimli fiyat (sale_price_net) Trendyol'un gerçek hakediş ve komisyon baz aldığı tutardır.
+        active_sale_price = sale_price_net if sale_price_net is not None else sale_price_gross
+        discount_amount = sale_price_gross - active_sale_price
+
         # 1. Satış ve Maliyet KDV'leri
-        # KDV Hariç Tutar = KDV Dahil / (1 + KDV Oranı)
-        # KDV Tutarı = KDV Hariç * KDV Oranı
         sale_kdv_factor = Decimal("1") + (vat_rate / Decimal("100"))
-        satis_kdv = q((sale_price_gross / sale_kdv_factor) * (vat_rate / Decimal("100")))
+        
+        if is_micro_export:
+            satis_kdv = Decimal("0.00")
+        else:
+            # KDV, indirimli fiyat üzerinden hesaplanır
+            satis_kdv = q((active_sale_price / sale_kdv_factor) * (vat_rate / Decimal("100")))
+            
         alis_kdv = q((product_cost / sale_kdv_factor) * (vat_rate / Decimal("100")))
 
-        # 2. Komisyon Hesabı (Komisyon, KDV dahil satış tutarı üzerinden hesaplanır)
-        commission_cost = q(sale_price_gross * (commission_rate / Decimal("100")))
-        # Komisyon KDV'si %20 sabit alınır (Hizmet/Fatura)
+        # 2. Komisyon Hesabı (Komisyon, indirimli satış tutarı üzerinden hesaplanır)
+        commission_cost = q(active_sale_price * (commission_rate / Decimal("100")))
         komisyon_kdv = q((commission_cost / Decimal("1.20")) * Decimal("0.20"))
 
         # 3. Kargo Hesabı
-        # Kargo KDV'si %20 sabit alınır
         kargo_kdv = q((cargo_cost / Decimal("1.20")) * Decimal("0.20"))
 
-        # 4. Hizmet Bedeli KDV'si (%20)
-        hizmet_bedeli_kdv = q((service_fee / Decimal("1.20")) * Decimal("0.20"))
+        # 4. Mikro İhracat
+        intl_service_fee = Decimal("0.00")
+        return_loss = Decimal("0.00")
+        
+        if is_micro_export:
+            if is_returned:
+                hakedis = active_sale_price - commission_cost
+                if active_sale_price <= Decimal("2000.00"):
+                    return_loss = q(hakedis * Decimal("0.35"))
+                else:
+                    return_loss = q(hakedis * Decimal("0.30"))
+            else:
+                intl_service_fee = q(active_sale_price * Decimal("0.05"))
 
-        # 5. Ödenmesi Gereken Net KDV
+        # 5. Hizmet Bedeli KDV'si
+        hizmet_bedeli_kdv = q(((service_fee + intl_service_fee) / Decimal("1.20")) * Decimal("0.20"))
+
+        # 6. Ödenmesi Gereken Net KDV
         net_kdv = q(satis_kdv - (alis_kdv + komisyon_kdv + kargo_kdv + hizmet_bedeli_kdv))
 
-        # 6. Stopaj Kesintisi (Satış KDV Hariç tutarın yarısının %1'i veya muadil e-ticaret teşviki)
-        # Excel: 2000 => 16.67 çıkmış. Satış Fiyatı üzerinden tahmini: (2000 / 1.20) * 0.01
-        stopaj = q((sale_price_gross / Decimal("1.20")) * Decimal("0.01"))
+        # 7. Stopaj
+        stopaj = q((active_sale_price / Decimal("1.20")) * Decimal("0.01"))
 
-        # 7. Net Kâr
-        # Tüm KDV dahil maliyetler çıkıldıktan sonra, KDV farkı (Devlete Ödenecek KDV) da bir giderdir.
-        # net_kdv negatifse (devreden kdv), zarar azaltıcı etki yapar. Bu yüzden çıkarılır (veya eksi eksi artı olur).
-        net_profit = q(sale_price_gross - (product_cost + commission_cost + cargo_cost + service_fee + stopaj + net_kdv))
+        # 8. Net Kâr
+        net_profit = q(active_sale_price - (product_cost + commission_cost + cargo_cost + service_fee + intl_service_fee + stopaj + net_kdv + return_loss))
         
         # Breakdown Mapping
         breakdown = {
             FinancialTransactionType.PRODUCT_COST.value: product_cost,
             FinancialTransactionType.COMMISSION.value: commission_cost,
             FinancialTransactionType.SHIPPING_FEE.value: cargo_cost,
-            FinancialTransactionType.SERVICE_FEE.value: service_fee,
+            FinancialTransactionType.SERVICE_FEE.value: service_fee + intl_service_fee,
             FinancialTransactionType.WITHHOLDING.value: stopaj,
             FinancialTransactionType.VAT_OUTPUT.value: net_kdv,
+            FinancialTransactionType.RETURN_LOSS.value: return_loss,
+            "DISCOUNT": discount_amount,
         }
 
         profit_margin = Decimal("0.00")
-        if sale_price_gross > Decimal("0"):
-            profit_margin = q((net_profit / sale_price_gross) * Decimal("100.00"))
+        if active_sale_price > Decimal("0"):
+            profit_margin = q((net_profit / active_sale_price) * Decimal("100.00"))
 
         profit_on_cost = Decimal("0.00")
         if product_cost > Decimal("0"):
             profit_on_cost = q((net_profit / product_cost) * Decimal("100.00"))
 
         return {
-            "gross_revenue": sale_price_gross,
-            "net_revenue": sale_price_gross - (satis_kdv if satis_kdv > 0 else 0), # Muhasebesel net
+            "gross_revenue": active_sale_price,  # Artık indirim düşülmüş (Net Satış) hali
+            "net_revenue": active_sale_price - (satis_kdv if satis_kdv > 0 else 0),
             "total_costs": q(product_cost + commission_cost + cargo_cost + service_fee + stopaj + net_kdv),
             "net_profit": net_profit,
             "profit_margin": profit_margin,
             "profit_on_cost": profit_on_cost,
+            "discount": discount_amount,
             "kdv_detail": {
                 "satis_kdv": satis_kdv,
                 "alis_kdv": alis_kdv,
@@ -144,6 +167,10 @@ class ProfitCalculator:
         """
         # Standart veriler
         sale_price_gross = order_item.sale_price_gross
+        sale_price_net = order_item.sale_price_net
+        is_micro_export = order_item.order.country_code != "TR"
+        is_returned = order_item.order.status in ["Returned", "Cancelled"]
+        
         product_cost = Decimal("0.00")
         cargo_cost = Decimal("0.00")
         commission_rate = Decimal("0.00")
@@ -156,13 +183,21 @@ class ProfitCalculator:
             elif tx.transaction_type == FinancialTransactionType.SHIPPING_FEE.value:
                 cargo_cost = abs(tx.amount)
                 
-        # Ürün verisi varsa komisyon, vat ve tahmini kargoyu al
+        # Komisyon ve KDV: sipariş satırındaki snapshot verileri öncelikli
+        if order_item.applied_commission_rate and order_item.applied_commission_rate > Decimal("0.00"):
+            commission_rate = order_item.applied_commission_rate
+        if order_item.applied_vat_rate and order_item.applied_vat_rate > Decimal("0.00"):
+            vat_rate = order_item.applied_vat_rate
+
+        # Ürün verisi varsa fallback komisyon, vat ve tahmini kargoyu al
         if order_item.product_variant and order_item.product_variant.product:
             variant = order_item.product_variant
             product = variant.product
             
-            commission_rate = product.commission_rate
-            vat_rate = product.vat_rate
+            if commission_rate == Decimal("0.00"):
+                commission_rate = product.commission_rate
+            if vat_rate == Decimal("20.00"):  # Default ise ürün detayından al
+                vat_rate = product.vat_rate if product.vat_rate > Decimal("0.00") else vat_rate
             
             # Variant-level cost overrides Transactions if Transaction isn't present
             if product_cost == Decimal("0.00") and variant.cost_price > Decimal("0.00"):
@@ -206,5 +241,8 @@ class ProfitCalculator:
             product_cost=product_cost,
             cargo_cost=cargo_cost,
             commission_rate=commission_rate,
-            vat_rate=vat_rate
+            vat_rate=vat_rate,
+            is_micro_export=is_micro_export,
+            sale_price_net=sale_price_net,
+            is_returned=is_returned
         )

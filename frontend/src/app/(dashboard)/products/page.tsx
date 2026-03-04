@@ -15,7 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Package, Search, Save, RefreshCw, ChevronDown, ChevronUp, Copy, CheckCircle2, Check } from "lucide-react";
+import { Package, Search, Save, RefreshCw, ChevronDown, ChevronUp, Copy, CheckCircle2, Check, FileDown, FileUp } from "lucide-react";
 
 interface Variant {
     id: number;
@@ -56,6 +56,9 @@ export default function ProductsPage() {
     const [updatingVariantId, setUpdatingVariantId] = useState<number | null>(null);
     const [updatingProductId, setUpdatingProductId] = useState<number | null>(null);
     const [copiedBarcode, setCopiedBarcode] = useState<string | null>(null);
+    const [isExporting, setIsExporting] = useState(false);
+    const [isImporting, setIsImporting] = useState(false);
+    const fileInputRef = React.useRef<HTMLInputElement>(null);
 
     const fetchProducts = async (currentPage = page, search = searchTerm) => {
         setIsLoading(true);
@@ -140,6 +143,7 @@ export default function ProductsPage() {
             await api.patch("/products/", {
                 id: product.id,
                 desi: product.desi,
+                vat_rate: product.vat_rate,
                 return_rate: product.return_rate,
                 fast_delivery: product.fast_delivery
             });
@@ -161,6 +165,80 @@ export default function ProductsPage() {
             const tempProduct = { ...product, fast_delivery: newValue };
             await saveProduct(tempProduct, false);
             toast.success(`Bugün kargoda durumu ${newValue ? 'Aktif' : 'Kapalı'} olarak güncellendi.`);
+        }
+    };
+
+    const handleExport = async () => {
+        setIsExporting(true);
+        try {
+            const token = localStorage.getItem("access_token");
+            const API_BASE = process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+
+            const response = await fetch(`${API_BASE}/products/export-excel/`, {
+                headers: {
+                    ...(token ? { Authorization: `Bearer ${token}` } : {})
+                }
+            });
+
+            if (!response.ok) throw new Error("İndirme başarısız");
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "Urun_Maliyetleri.xlsx";
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+
+            toast.success("Excel başarıyla indirildi.");
+        } catch (error) {
+            console.error(error);
+            toast.error("Excel indirilirken bir hata oluştu.");
+        } finally {
+            setIsExporting(false);
+        }
+    };
+
+    const handleImportFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        setIsImporting(true);
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const token = localStorage.getItem("access_token");
+            const API_BASE = process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+
+            const response = await fetch(`${API_BASE}/products/import-excel/`, {
+                method: "POST",
+                headers: {
+                    ...(token ? { Authorization: `Bearer ${token}` } : {})
+                },
+                body: formData
+            });
+
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                throw new Error(data.error || "Yükleme başarısız");
+            }
+
+            const data = await response.json();
+            toast.success(data.message || "Excel başarıyla yüklendi.");
+            // Reset page and refetch
+            setPage(1);
+            fetchProducts(1, searchTerm);
+        } catch (error: any) {
+            console.error(error);
+            toast.error(error.message || "Excel yüklenirken bir hata oluştu.");
+        } finally {
+            setIsImporting(false);
+            if (fileInputRef.current) {
+                fileInputRef.current.value = "";
+            }
         }
     };
 
@@ -196,7 +274,27 @@ export default function ProductsPage() {
                             <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
                             Yenile
                         </Button>
-                        <Button className="bg-green-600 hover:bg-green-700 text-white shadow-sm h-10">
+                        <Button
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={isImporting}
+                            className="bg-slate-800 hover:bg-slate-700 text-slate-300 shadow-sm h-10 border border-slate-700"
+                        >
+                            {isImporting ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <FileUp className="w-4 h-4 mr-2" />}
+                            Excel Yükle
+                        </Button>
+                        <input
+                            type="file"
+                            accept=".xlsx, .xls"
+                            className="hidden"
+                            ref={fileInputRef}
+                            onChange={handleImportFileChange}
+                        />
+                        <Button
+                            onClick={handleExport}
+                            disabled={isExporting}
+                            className="bg-green-600 hover:bg-green-700 text-white shadow-sm h-10"
+                        >
+                            {isExporting ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <FileDown className="w-4 h-4 mr-2" />}
                             Excel İndir
                         </Button>
                     </div>
@@ -287,7 +385,16 @@ export default function ProductsPage() {
                                                     </TableCell>
                                                     <TableCell className="text-center text-slate-600">---</TableCell>
                                                     <TableCell className="text-center text-slate-600">---</TableCell>
-                                                    <TableCell className="text-center text-slate-600">---</TableCell>
+                                                    <TableCell className="px-2">
+                                                        <div className="flex justify-center">
+                                                            <Input
+                                                                type="number" step="1"
+                                                                className="w-16 text-center h-8 bg-slate-950 border-slate-700 text-slate-300 text-sm focus-visible:ring-orange-500/50"
+                                                                value={master.vat_rate}
+                                                                onChange={(e) => handleProductChange(master.id, "vat_rate", e.target.value)}
+                                                            />
+                                                        </div>
+                                                    </TableCell>
                                                     <TableCell className="text-center px-2">
                                                         <Input
                                                             type="number" step="0.1"
@@ -333,6 +440,7 @@ export default function ProductsPage() {
                                                         <TableRow key={`var-${v.id}`} className="bg-slate-900/40 hover:bg-slate-800/50 border-b border-slate-800/50 transition-colors">
                                                             <TableCell className="relative px-2">
                                                                 <div className="absolute top-0 left-1/2 w-px h-full bg-slate-700 -translate-x-1/2"></div>
+                                                                {/* T-Shape / L-Shape Connector Logic for exact UI match */}
                                                                 <div className="absolute top-1/2 left-1/2 w-4 h-px bg-slate-700"></div>
                                                             </TableCell>
                                                             <TableCell className="px-2 max-w-[280px]">

@@ -1,6 +1,6 @@
 import logging
 from decimal import Decimal
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime, timezone as dt_timezone, timedelta
 from django.utils import timezone
 from core.models import (
     Organization, MarketplaceAccount, Product, Order, OrderItem,
@@ -19,6 +19,7 @@ STATUS_MAP = {
     "Delivered": Order.Status.DELIVERED,
     "Cancelled": Order.Status.CANCELLED,
     "Returned": Order.Status.RETURNED,
+    "UnSupplied": Order.Status.CANCELLED,
 }
 
 
@@ -57,10 +58,24 @@ class TrendyolSyncService:
             barcode = p_data.get("barcode")
             if not barcode:
                 continue
+
+            # Gereksiz ürünleri filtrele (Kilitli, Kara Listede, Reddedilmiş, veya Manuel Satışa Kapatılmış)
+            is_locked = p_data.get("locked", False)
+            is_blacklisted = p_data.get("blacklisted", False)
+            is_rejected = p_data.get("rejected", False)
+            is_on_sale = p_data.get("onSale", False)
+            stock_quantity = int(p_data.get("quantity", 0))
+
+            if is_locked or is_blacklisted or is_rejected:
+                continue
+            
+            # Stok varken 'onSale' False ise manuel satışa kapatılmış demektir ("Satışa Kapalı" sekmesindeki ürünler)
+            # Stok 0 iken 'onSale' False ise sadece tükenmiştir, bunlar eklenebilir ("Tükenen" ürünler).
+            if not is_on_sale and stock_quantity > 0:
+                continue
                 
             vat_rate = Decimal(str(p_data.get("vatRate", "0")))
             sale_price = Decimal(str(p_data.get("salePrice", "0")))
-            stock_quantity = int(p_data.get("quantity", 0))
             brand = p_data.get("brand", "")
             category_name = p_data.get("categoryName", "")
             product_main_id = p_data.get("productMainId", "")
@@ -90,13 +105,23 @@ class TrendyolSyncService:
             if created:
                 product.initial_stock = stock_quantity
                 product.save(update_fields=["initial_stock"])
+                
+            create_ts = p_data.get("createDateTime")
+            if create_ts:
+                try:
+                    dt = datetime.fromtimestamp(create_ts / 1000.0, tz=dt_timezone.utc)
+                    Product.objects.filter(pk=product.pk).update(trendyol_created_at=dt)
+                except Exception:
+                    pass
+            
+            stock_code = p_data.get("stockCode") or p_data.get("productCode") or ""
             
             # Auto-create a default ProductVariant for easy order matching
-            ProductVariant.objects.get_or_create(
+            ProductVariant.objects.update_or_create(
                 product=product,
                 barcode=barcode,
                 defaults={
-                    "marketplace_sku": product_main_id,
+                    "marketplace_sku": str(stock_code).strip(),
                     "title": p_data.get("title", "")[:500],
                 }
             )
@@ -104,14 +129,56 @@ class TrendyolSyncService:
         logger.info(f"Products sync complete. {len(products_data)} items processed.")
 
     # ------------------------------------------------------------------
-    # ORDERS — Tüm durumlar çekilir
+    # ORDERS — Tüm durumlar çekilir (kayan pencereli çekim)
     # ------------------------------------------------------------------
     def sync_orders(self):
-        logger.info("Fetching orders (all statuses)...")
-        orders_data = self.adapter.fetch_orders()  # Tüm durumları çek (status=None)
+        """
+        Trendyol API farklı tarih aralıkları için farklı sipariş alt kümeleri döner.
+        Tek bir geniş aralık veya aylık parçalar bazı siparişleri kaçırır.
+        Çözüm: 15 günlük kayan pencereler + 7 gün adım ile tüm geçmişi kapla.
+        Dedup shipmentPackageId ile. unique_together constraint DB'de garantiler.
+        """
+        logger.info("Fetching orders (sliding window, 365 days)...")
+        
+        now = datetime.now(dt_timezone.utc)
+        total_days = 365  # 1 yıl geriye git — tüm geçmiş
+        window_size = 15  # gün
+        step_size = 7     # gün (8 gün çakışma)
+        
+        all_orders_data = []
+        
+        day = 0
+        while day < total_days:
+            window_start = now - timedelta(days=total_days - day)
+            window_end = now - timedelta(days=max(0, total_days - day - window_size))
+            
+            start_ms = int(window_start.timestamp() * 1000)
+            end_ms = int(window_end.timestamp() * 1000)
+            
+            chunk_orders = self.adapter.fetch_orders(
+                start_date_ms=start_ms,
+                end_date_ms=end_ms
+            )
+            all_orders_data.extend(chunk_orders)
+            
+            day += step_size
+        
+        # Tekrarlananları shipmentPackageId ile filtrele
+        seen_packages = set()
+        orders_data = []
+        for o_data in all_orders_data:
+            pkg_id = str(o_data.get("shipmentPackageId") or o_data.get("id") or "")
+            if pkg_id and pkg_id not in seen_packages:
+                seen_packages.add(pkg_id)
+                orders_data.append(o_data)
+        
+        logger.info(f"Total unique orders to process: {len(orders_data)}")
         
         for o_data in orders_data:
             order_number = o_data.get("orderNumber")
+            # Trendyol her paketi ayrı bir kayıt olarak döner.
+            # shipmentPackageId her paket için benzersizdir — aynı orderNumber birden fazla pakete sahip olabilir.
+            shipment_package_id = str(o_data.get("shipmentPackageId") or o_data.get("id") or order_number)
             if not order_number:
                 continue
 
@@ -122,14 +189,17 @@ class TrendyolSyncService:
             raw_status = o_data.get("status", "Created")
             mapped_status = STATUS_MAP.get(raw_status, Order.Status.CREATED)
             
+            # micro export flag
+            is_micro = o_data.get("micro", False)
+            
             order, _ = Order.objects.update_or_create(
                 organization=self.organization,
-                marketplace_order_id=order_number,
+                marketplace_order_id=shipment_package_id,  # UNIQUE per package
                 defaults={
                     "marketplace_account": self.account,
                     "order_date": order_date,
                     "status": mapped_status,
-                    "channel": Order.Channel.TRENDYOL,
+                    "channel": Order.Channel.MICRO_EXPORT if is_micro else Order.Channel.TRENDYOL,
                 }
             )
 
@@ -149,24 +219,33 @@ class TrendyolSyncService:
                 price = Decimal(str(line.get("amount", line.get("price", "0"))))
                 discount = Decimal(str(line.get("discount", "0")))
                 quantity = int(line.get("quantity", 1))
+                commission_rate_raw = line.get("commission")  # Trendyol API: 'commission' alanı (oran %)
+                vat_rate_raw = line.get("vatRate")
                 
+                item_status = line.get("orderLineItemStatusName", raw_status)
+                
+                item_defaults = {
+                    "product_variant": variant,
+                    "sku": line.get("merchantSku", barcode),
+                    "quantity": quantity,
+                    "sale_price_gross": price,
+                    "sale_price_net": price - discount,
+                    "discount": discount,
+                    "status": item_status,
+                }
+                if commission_rate_raw is not None:
+                    item_defaults["applied_commission_rate"] = Decimal(str(commission_rate_raw))
+                if vat_rate_raw is not None:
+                    item_defaults["applied_vat_rate"] = Decimal(str(vat_rate_raw))
+
                 order_item, item_created = OrderItem.objects.update_or_create(
                     order=order,
                     marketplace_line_id=line_id,
-                    defaults={
-                        "product_variant": variant,
-                        "sku": line.get("merchantSku", barcode),
-                        "quantity": quantity,
-                        "sale_price_gross": price,
-                        "sale_price_net": price - discount,
-                        "discount": discount,
-                        "status": raw_status,
-                    }
+                    defaults=item_defaults,
                 )
                 
-                # Eğer variant varsa Product'ın commission_rate'ini güncelle
+                # Eğer variant varsa Product'ın commission_rate'ini güncelle (fallback verisi)
                 if variant and variant.product:
-                    commission_rate_raw = line.get("commissionRate")
                     if commission_rate_raw is not None:
                         variant.product.commission_rate = Decimal(str(commission_rate_raw))
                         variant.product.save(update_fields=["commission_rate"])

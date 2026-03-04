@@ -8,7 +8,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend, FunnelChart, Funnel, LabelList
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, DollarSign, Package, AlertCircle, ShoppingCart, Info
+  TrendingUp, TrendingDown, DollarSign, Package, AlertCircle, ShoppingCart, Info, RefreshCw
 } from "lucide-react";
 import clsx from "clsx";
 import { api } from "@/lib/api";
@@ -29,25 +29,42 @@ function DashboardContent() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState<string | null>(null);
 
   const channel = searchParams.get("channel") || "trendyol";
 
+  const fetchData = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const json = await api.get(`/dashboard/overview/?${searchParams.toString()}`);
+      setData(json);
+    } catch (err) {
+      console.error(err);
+      setError("Veriler yüklenirken bir hata oluştu veya sunucuya bağlanılamadı.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      setError("");
-      try {
-        const json = await api.get(`/dashboard/overview/?${searchParams.toString()}`);
-        setData(json);
-      } catch (err) {
-        console.error(err);
-        setError("Veriler yüklenirken bir hata oluştu veya sunucuya bağlanılamadı.");
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchData();
   }, [searchParams]);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      await api.post("/sync/run/", {});
+      setLastSync(new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }));
+      // Sync done — refresh dashboard data
+      await fetchData();
+    } catch (err) {
+      console.error("Sync error:", err);
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -105,8 +122,23 @@ function DashboardContent() {
           <h1 className="text-xl sm:text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-white/70">
             {channel === "micro_export" ? "Mikro İhracat Dashboard" : "Genel Bakış Dashboard"}
           </h1>
-          <p className="text-xs text-white/40 mt-1">Son senkronizasyon: {new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}</p>
+          <p className="text-xs text-white/40 mt-1">
+            {lastSync ? `Son senkronizasyon: ${lastSync}` : "Verileri güncellemek için senkronize edin"}
+          </p>
         </div>
+        <button
+          onClick={handleSync}
+          disabled={syncing}
+          className={clsx(
+            "flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 border",
+            syncing
+              ? "bg-blue-500/20 text-blue-300 border-blue-500/30 cursor-wait"
+              : "bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white border-blue-400/20 shadow-lg shadow-blue-500/20 hover:shadow-blue-500/30"
+          )}
+        >
+          <RefreshCw className={clsx("w-4 h-4", syncing && "animate-spin")} />
+          {syncing ? "Senkronize Ediliyor..." : "Senkronize Et"}
+        </button>
       </div>
 
       <GlobalFilter />

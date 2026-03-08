@@ -43,6 +43,7 @@ class TrendyolSyncService:
         self.sync_products()
         self.sync_orders()
         self.sync_settlements()
+        self.sync_cargo_invoices()
         
         self.account.last_sync_at = timezone.now()
         self.account.save()
@@ -340,3 +341,79 @@ class TrendyolSyncService:
                 )
         
         logger.info(f"Settlements sync complete. {len(settlements_data)} items processed.")
+
+    # ------------------------------------------------------------------
+    # CARGO INVOICES — Detaylı kargo kesinti faturaları
+    # ------------------------------------------------------------------
+    def sync_cargo_invoices(self):
+        """
+        OtherFinancials API üzerinden DeductionInvoices çekilir, 
+        daha sonra Cargo Invoice API üzerinden sipariş bazlı kargo kesintileri işlenir.
+        """
+        logger.info("Fetching cargo invoices...")
+        try:
+            # Sadece son 30 günü çek, Trendyol OtherFinancials 30 günden eskisini kilitler
+            end_date = timezone.now()
+            start_date = end_date - timedelta(days=30)
+            start_ms = int(start_date.timestamp() * 1000)
+            end_ms = int(end_date.timestamp() * 1000)
+            
+            financials_data = self.adapter.fetch_other_financials(start_ms, end_ms)
+        except Exception as e:
+            logger.warning(f"Cargo Invoices fetch failed (non-critical): {e}")
+            return
+
+        if not financials_data:
+            logger.info("No OtherFinancials data returned.")
+            return
+
+        invoice_ids = set()
+        for f_data in financials_data:
+            # Kargo Faturası kesintilerini filtrele
+            if f_data.get("transactionType") in ["DeductionInvoices", "Kargo Faturası", "Kargo Fatura"]:
+                invoice_id = f_data.get("id") or f_data.get("invoiceSerialNumber") or f_data.get("invoiceId")
+                if invoice_id:
+                    invoice_ids.add(str(invoice_id))
+
+        if not invoice_ids:
+            logger.info("No cargo invoices found in the recent period.")
+            return
+
+        processed_count = 0
+        for inv_id in invoice_ids:
+            try:
+                cargo_items = self.adapter.fetch_cargo_invoice_items(inv_id)
+                for item in cargo_items:
+                    order_number = item.get("orderNumber")
+                    if not order_number:
+                        continue
+
+                    order = Order.objects.filter(
+                        organization=self.organization,
+                        marketplace_order_id=str(order_number)
+                    ).first()
+
+                    if not order:
+                        continue
+
+                    # Kargo faturasında birden fazla kalem olabilir (farklı paketler)
+                    # Ama biz genel bir SHIPPING_FEE atıyoruz
+                    cargo_amount = Decimal(str(item.get("amount", "0")))
+                    if cargo_amount > 0:
+                        first_item = order.items.first()
+                        if first_item:
+                            FinancialTransaction.objects.update_or_create(
+                                organization=self.organization,
+                                order_item_ref=first_item,
+                                transaction_type=FinancialTransactionType.SHIPPING_FEE,
+                                defaults={
+                                    "amount": cargo_amount,
+                                    "occurred_at": order.order_date or timezone.now(),
+                                    "raw_payload": item,
+                                }
+                            )
+                            processed_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to process cargo invoice {inv_id}: {e}")
+
+        logger.info(f"Cargo Invoices sync complete. Processed {processed_count} individual package fees.")

@@ -20,11 +20,19 @@ MONTHS_TR = {
 def format_date_tr(dt):
     if not dt:
         return ""
-    return f"{dt.day:02d} {MONTHS_TR[dt.month]} {dt.year} - {dt.strftime('%H:%M')}"
+    from django.utils import timezone
+    from datetime import datetime
+    if isinstance(dt, datetime) and timezone.is_aware(dt):
+        dt = timezone.localtime(dt)
+    return f"{dt.day:02d} {MONTHS_TR[dt.month]} {dt.year} - {dt.strftime('%H:%M') if isinstance(dt, datetime) else '00:00'}"
 
 def format_date_short_tr(dt):
     if not dt:
         return ""
+    from django.utils import timezone
+    from datetime import datetime
+    if isinstance(dt, datetime) and timezone.is_aware(dt):
+        dt = timezone.localtime(dt)
     return f"{dt.day:02d} {MONTHS_TR[dt.month]}"
     
 class TriggerSyncView(APIView):
@@ -65,7 +73,10 @@ class DashboardOverviewView(APIView):
     """
     GET /api/dashboard/overview
     Filtrelere göre Sipariş, Ürün ve Finansal verileri toplayıp gerçek KPI döndürür.
-    Mikro ihracat ve Trendyol olarak 'channel' parametresiyle çalışır.
+    
+    Toplam Ciro = Sipariş kayıtlarındaki sale_price_net toplamı (Trendyol'un "amount" alanı — indirimli satış fiyatı)
+    Maliyetlendirilen Ciro = Sadece maliyeti tanımlı ürünlerin cirosu
+    Kâr Tutarı = Maliyetlendirilen ciro üzerinden ProfitCalculator ile hesaplanan kâr
     """
     permission_classes = [IsAuthenticated]
 
@@ -84,14 +95,20 @@ class DashboardOverviewView(APIView):
 
         # Filtreleri al
         channel = request.query_params.get("channel", "trendyol")
-        countries = request.query_params.get("countries", "") # virgülle ayrılmış
+        countries = request.query_params.get("countries", "")
         min_date_str = request.query_params.get("min_date")
         max_date_str = request.query_params.get("max_date")
 
         # Organizasyonun siparişlerini çek
-        orders_qs = Order.objects.select_related("marketplace_account").filter(
-            organization=org, channel=channel
-        )
+        # Trendyol panelinde domestic ve micro_export birlikte gösteriliyor
+        if channel == "trendyol":
+            orders_qs = Order.objects.select_related("marketplace_account").filter(
+                organization=org, channel__in=["trendyol", "micro_export"]
+            )
+        else:
+            orders_qs = Order.objects.select_related("marketplace_account").filter(
+                organization=org, channel=channel
+            )
 
         if countries:
             country_list = [c.strip() for c in countries.split(",")]
@@ -105,63 +122,77 @@ class DashboardOverviewView(APIView):
                 ).replace(tzinfo=dt_tz.utc)
                 orders_qs = orders_qs.filter(order_date__gte=min_date, order_date__lte=max_date)
             except ValueError:
-                pass # Parse error, apply no date filter
+                pass
 
-        # İptal edilmiş siparişleri ciro ve kâr hesabından çıkar
-        # Toplam Ciro = Net Satış (Trendyol'daki gibi)
-        active_orders_qs = orders_qs.exclude(status__in=["Cancelled", "Returned"])
+        # ---------------------------------------------------------------
+        # 1. TOPLAM CİRO = Direkt sipariş kayıtlarından (Trendyol gibi)
+        #    - Tüm siparişlerin "sale_price_net" (indirimli satış tutarı) toplamı
+        #    - İptal ve iade düşülmüş hali (aktif siparişler)
+        # ---------------------------------------------------------------
+        total_orders = orders_qs.count()
+        
+        active_orders_qs = orders_qs.exclude(status__in=["Cancelled", "Returned", "UnSupplied"])
         cancelled_orders_qs = orders_qs.filter(status__in=["Cancelled", "Returned"])
         
-        total_orders = orders_qs.count()
         active_order_count = active_orders_qs.count()
         cancelled_count = cancelled_orders_qs.count()
         
-        # Sadece aktif (iptal edilmemiş, iade edilmemiş) siparişlerin kalemlerini hesapla
-        order_items = OrderItem.objects.select_related("order").prefetch_related("transactions").filter(
+        # Toplam Ciro: Aktif sipariş kalemlerinin sale_price_net toplamı
+        # sale_price_net = Trendyol'un "amount" alanı (indirimli satış tutarı)
+        active_items_qs = OrderItem.objects.filter(
             order__in=active_orders_qs
         ).exclude(status__in=["Cancelled", "Returned", "UnSupplied"])
-
-        total_gross = Decimal("0.00")
-        total_net = Decimal("0.00")
+        
+        revenue_agg = active_items_qs.aggregate(
+            total_gross=django_models.Sum("sale_price_gross"),
+            total_net=django_models.Sum("sale_price_net"),
+            total_discount=django_models.Sum("discount"),
+            total_items=django_models.Count("id"),
+            total_quantity=django_models.Sum("quantity"),
+        )
+        
+        toplam_ciro = revenue_agg["total_net"] or Decimal("0.00")
+        total_gross = revenue_agg["total_gross"] or Decimal("0.00")
+        total_discount = revenue_agg["total_discount"] or Decimal("0.00")
+        total_items_sold = revenue_agg["total_quantity"] or 0
+        
+        # ---------------------------------------------------------------
+        # 2. KARLILIK HESABI = ProfitCalculator ile (sadece maliyeti olan ürünler)
+        # ---------------------------------------------------------------
         total_costs = Decimal("0.00")
         total_profit = Decimal("0.00")
+        total_costed_revenue = Decimal("0.00")
         
         breakdown = defaultdict(Decimal)
-        # Initialize with known types to ensure they exist in response if needed
         for tx_type in FinancialTransactionType:
             breakdown[tx_type.value] = Decimal("0.00")
         country_profits = {}
         
-        # Ek Metrik Havuzları (Rakip UI için)
-        total_items_sold = 0
         total_cargo_cost = Decimal("0.00")
         total_commission_cost = Decimal("0.00")
-        total_discount = Decimal("0.00")
         
-        # Funnel için Toplamlar (Brüt Ciro -> Kargo Düşülmüş -> Pazaryeri Masrafı Düşülmüş -> Vergi Düşülmüş -> Net)
         funnel_gross = Decimal("0.00")
         funnel_cargo = Decimal("0.00")
-        funnel_marketplace_fees = Decimal("0.00") # Komisyon + Hizmet bedeli + Ceza vs
-        funnel_taxes = Decimal("0.00")            # Satış KDV + Stopaj
+        funnel_marketplace_fees = Decimal("0.00")
+        funnel_taxes = Decimal("0.00")
         funnel_net = Decimal("0.00")
 
-        # Profit motoruyla her satırı tek tek hesapla (sadece aktif siparişler)
-        for item in order_items:
+        # ProfitCalculator ile her satırı tek tek hesapla
+        for item in active_items_qs.select_related("order").prefetch_related("transactions"):
             res = ProfitCalculator.calculate_for_order_item(item)
             
-            gross = res["gross_revenue"]
-            net = res["net_revenue"]
+            item_revenue = res["gross_revenue"]  # ProfitCalculator'ın döndüğü = sale_price_net
             costs = res["total_costs"]
             profit = res["net_profit"]
             
-            total_gross += gross
-            total_net += net
             total_costs += costs
             total_profit += profit
-            total_items_sold += item.quantity
-            total_discount += item.discount
             
-            funnel_gross += gross
+            item_product_cost = res["breakdown"].get(FinancialTransactionType.PRODUCT_COST.value, Decimal("0.00"))
+            if item_product_cost > Decimal("0.00"):
+                total_costed_revenue += item.sale_price_net  # Gerçek satış fiyatı
+            
+            funnel_gross += item.sale_price_net  # Gerçek satış fiyatı
             
             item_cargo = Decimal("0.00")
             item_mp_fees = Decimal("0.00")
@@ -189,53 +220,50 @@ class DashboardOverviewView(APIView):
 
         funnel_net = total_profit
 
-        # Kâr Marjları ve Oranlar
+        # Kâr Marjları
         profit_margin = Decimal("0.00")
-        if total_net > Decimal("0.00"):
-            profit_margin = (total_profit / total_net) * Decimal("100.00")
+        if toplam_ciro > Decimal("0.00"):
+            profit_margin = (total_profit / toplam_ciro) * Decimal("100.00")
             
         profit_on_cost_ratio = Decimal("0.00")
         total_product_cost = breakdown.get(FinancialTransactionType.PRODUCT_COST.value, Decimal("0.00"))
         if total_product_cost > Decimal("0.00"):
             profit_on_cost_ratio = (total_profit / total_product_cost) * Decimal("100.00")
 
-        # Kayıp Kaçak (Ceza + İade + Erken Ödeme)
+        # Kayıp Kaçak
         lost_and_leakage = (
             breakdown.get(FinancialTransactionType.PENALTY.value, Decimal("0")) +
             breakdown.get(FinancialTransactionType.RETURN_LOSS.value, Decimal("0")) +
             breakdown.get(FinancialTransactionType.EARLY_PAYMENT.value, Decimal("0"))
         )
         
-        # --- Ek: Metrik Listeleri (Sipariş, Ürün, İade vs) ---
+        # --- Metrik Listeleri ---
         
-        # Sipariş Metrikleri (sadece aktif siparişler üzerinden)
         order_metrics = {
             "order_count": active_order_count,
             "total_order_count": total_orders,
             "cancelled_count": cancelled_count,
-            "avg_revenue_per_order": str(round(total_net / active_order_count, 2)) if active_order_count > 0 else "0.00",
+            "avg_revenue_per_order": str(round(toplam_ciro / active_order_count, 2)) if active_order_count > 0 else "0.00",
             "avg_profit_per_order": str(round(total_profit / active_order_count, 2)) if active_order_count > 0 else "0.00",
             "avg_cargo_per_order": str(round(total_cargo_cost / active_order_count, 2)) if active_order_count > 0 else "0.00",
         }
         
-        # Ürün Metrikleri
         product_metrics = {
             "items_sold": total_items_sold,
-            "avg_revenue_per_item": str(round(total_net / total_items_sold, 2)) if total_items_sold > 0 else "0.00",
+            "avg_revenue_per_item": str(round(toplam_ciro / total_items_sold, 2)) if total_items_sold > 0 else "0.00",
             "avg_profit_per_item": str(round(total_profit / total_items_sold, 2)) if total_items_sold > 0 else "0.00",
             "avg_cargo_per_item": str(round(total_cargo_cost / total_items_sold, 2)) if total_items_sold > 0 else "0.00",
-            "avg_commission_rate": str(round((total_commission_cost / total_gross)*100, 2)) if total_gross > 0 else "0.00",
+            "avg_commission_rate": str(round((total_commission_cost / toplam_ciro)*100, 2)) if toplam_ciro > 0 else "0.00",
             "avg_discount_rate": str(round((total_discount / total_gross)*100, 2)) if total_gross > 0 else "0.00",
         }
         
-        # İade Metrikleri (Gerçek verilerden hesapla)
+        # İade Metrikleri
         return_loss_val = breakdown.get(FinancialTransactionType.RETURN_LOSS.value, Decimal("0.00"))
         returned_orders_count = orders_qs.filter(status__in=["Returned", "Cancelled"]).count()
         real_return_rate = Decimal("0.00")
         if total_orders > 0:
             real_return_rate = round(Decimal(returned_orders_count) / Decimal(total_orders) * Decimal("100"), 2)
         
-        # Kargo zararı: İade edilen siparişlerin kargo maliyetlerini topla
         returned_items = OrderItem.objects.filter(order__in=orders_qs.filter(status__in=["Returned", "Cancelled"]))
         total_return_cargo_loss = Decimal("0.00")
         for r_item in returned_items:
@@ -255,10 +283,10 @@ class DashboardOverviewView(APIView):
             "total_ads_cost": str(ads_val),
             "influencer_cut": "0.00",
             "ads_profit_index": str(round((ads_val / total_profit)*100, 2)) if total_profit > 0 else "0.00",
-            "ads_revenue_index": str(round((ads_val / total_net)*100, 2)) if total_net > 0 else "0.00",
+            "ads_revenue_index": str(round((ads_val / toplam_ciro)*100, 2)) if toplam_ciro > 0 else "0.00",
         }
         
-        # Net Kâr Performansı Hunisi (Funnel)
+        # Net Kâr Performansı Hunisi
         net_profit_funnel = [
             {"name": "Ciro", "value": str(funnel_gross)},
             {"name": "Kargo Düşülmüş", "value": str(funnel_gross - funnel_cargo)},
@@ -267,32 +295,29 @@ class DashboardOverviewView(APIView):
             {"name": "Kâr", "value": str(funnel_net)},
         ]
         
-        # Kâr Performansı Gerçek History (Area Chart için)
+        # Kâr Performansı History (Area Chart)
         from datetime import timedelta
         from django.db.models.functions import TruncDate
         from django.db.models import Sum
         
         history = []
-        # Son 30 günde sipariş bazlı günlük kâr hesapla
         day_range = 30
         start_day = timezone.now() - timedelta(days=day_range)
         daily_orders = active_orders_qs.filter(order_date__gte=start_day).annotate(day=TruncDate('order_date')).values('day').annotate(
-            day_gross=Sum('items__sale_price_gross')
+            day_revenue=Sum('items__sale_price_net')
         ).order_by('day')
         
-        # Basitleştirilmiş: Her güne düşen toplam brüt üzerinden oranla yansıt
         daily_profit_map = {}
-        total_daily_gross = sum(d['day_gross'] or 0 for d in daily_orders)
+        total_daily_revenue = sum(d['day_revenue'] or 0 for d in daily_orders)
         for d in daily_orders:
             day_str = format_date_short_tr(d['day']) if d['day'] else "?"
-            day_gross = d['day_gross'] or Decimal("0")
-            if total_daily_gross > 0:
-                day_profit = total_profit * (day_gross / Decimal(str(total_daily_gross)))
+            day_revenue = d['day_revenue'] or Decimal("0")
+            if total_daily_revenue > 0:
+                day_profit = total_profit * (day_revenue / Decimal(str(total_daily_revenue)))
             else:
                 day_profit = Decimal("0")
             daily_profit_map[day_str] = round(day_profit, 2)
         
-        # Son 14 gün göster (daha okunaklı)
         for i in range(13, -1, -1):
             day = format_date_short_tr(timezone.now() - timedelta(days=i))
             history.append({
@@ -315,14 +340,15 @@ class DashboardOverviewView(APIView):
                     "image_url": p.image_url
                 })
         
-        # En az stoğu kalanı en üste al, max 5 tane yolla
         low_stock_list = sorted(low_stock_list, key=lambda x: x["current_stock"])[:5]
 
         return Response({
             "kpis": {
                 "total_orders": active_order_count,
                 "gross_revenue": str(total_gross),
-                "net_revenue": str(total_net),
+                "toplam_ciro": str(toplam_ciro),          # Toplam Ciro = SUM(sale_price_net) from order items
+                "costed_revenue": str(total_costed_revenue),  # Maliyetlendirilen Ciro
+                "net_revenue": str(toplam_ciro),           # Keep backward compat
                 "total_costs": str(total_costs),
                 "net_profit": str(total_profit),
                 "profit_margin": str(round(profit_margin, 2)),
@@ -725,8 +751,20 @@ class OrderListView(APIView):
         # prefetch_related ile db call optimizasyonu
         orders = Order.objects.filter(marketplace_account__organization=org).prefetch_related('items__product_variant__product', 'items__transactions').order_by('-order_date')
         
-        # Sadece son 50 siparişi gönderelim
-        orders = orders[:50]
+        min_date_str = request.query_params.get("min_date")
+        max_date_str = request.query_params.get("max_date")
+
+        if min_date_str and max_date_str:
+            from datetime import datetime
+            try:
+                min_date = timezone.make_aware(datetime.strptime(min_date_str, "%Y-%m-%d"))
+                max_date = timezone.make_aware(datetime.strptime(max_date_str + " 23:59:59", "%Y-%m-%d %H:%M:%S"))
+                orders = orders.filter(order_date__gte=min_date, order_date__lte=max_date)
+            except ValueError:
+                pass
+        else:
+            # Sadece son 50 siparişi gönderelim (filtre yoksa)
+            orders = orders[:50]
 
         data = []
         for order in orders:
@@ -805,6 +843,7 @@ class OrderListView(APIView):
                 "order_number": order.marketplace_order_id,
                 "order_date": format_date_tr(order.order_date),
                 "status": order.status,
+                "is_micro_export": order.channel == 'micro_export',
                 "total_gross": str(total_gross),
                 "total_profit": str(total_net_profit),
                 "profit_margin": str(profit_margin),
@@ -835,6 +874,18 @@ class ProductAnalysisView(APIView):
 
         orders = Order.objects.filter(marketplace_account__organization=org)
         
+        min_date_str = request.query_params.get("min_date")
+        max_date_str = request.query_params.get("max_date")
+
+        if min_date_str and max_date_str:
+            from datetime import datetime
+            try:
+                min_date = timezone.make_aware(datetime.strptime(min_date_str, "%Y-%m-%d"))
+                max_date = timezone.make_aware(datetime.strptime(max_date_str + " 23:59:59", "%Y-%m-%d %H:%M:%S"))
+                orders = orders.filter(order_date__gte=min_date, order_date__lte=max_date)
+            except ValueError:
+                pass
+                
         items = OrderItem.objects.filter(
             order__in=orders,
             product_variant__isnull=False

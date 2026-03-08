@@ -86,8 +86,8 @@ function DashboardContent() {
   }
 
   const kpis = [
-    { label: "Toplam Ciro", value: formatTR(data.kpis.gross_revenue), icon: ShoppingCart },
-    { label: "Kâr Cirosu", value: formatTR(data.kpis.net_revenue), icon: TrendingUp },
+    { label: "Toplam Ciro", value: formatTR(data.kpis.toplam_ciro || data.kpis.gross_revenue), icon: ShoppingCart },
+    { label: "Maliyetlendirilen Ciro", value: formatTR(data.kpis.costed_revenue || 0), icon: TrendingUp },
     { label: "Kâr Tutarı", value: formatTR(data.kpis.net_profit), icon: DollarSign },
     { label: "Kâr Satış Fiyatı Oranı", value: `%${data.kpis.profit_margin}`, icon: Package },
     { label: "Kâr / Ürün Maliyeti Oranı", value: `%${data.kpis.profit_on_cost_ratio}`, icon: DollarSign },

@@ -3,8 +3,13 @@
 import { useState, useEffect } from "react";
 import { formatCurrency, formatPercentage } from "@/lib/utils/format";
 import apiClient from "@/lib/api/client";
-import { Filter, Download, Layers, Calendar } from "lucide-react";
+import { Filter, Download, Layers, Calendar, RefreshCw } from "lucide-react";
 import clsx from "clsx";
+
+import { TableFilter, FilterState, FilterColumn, applyTableFilter } from "@/components/dashboard/TableFilter";
+import { DatePickerWithRange } from "@/components/dashboard/DateRangePicker";
+import { DateRange } from "react-day-picker";
+import { format, subDays } from "date-fns";
 
 interface CategoryAnalysis {
   id: string;
@@ -18,15 +23,35 @@ interface CategoryAnalysis {
   profit_margin: string;
 }
 
+const FILTER_COLUMNS: FilterColumn[] = [
+  { id: "category", label: "Kategori Adı", type: "text" },
+  { id: "product_count", label: "Ürün Sayısı", type: "number" },
+  { id: "total_sold_quantity", label: "Satılan Adet", type: "number" },
+  { id: "total_sales_amount", label: "Satış Tutarı (₺)", type: "number" },
+  { id: "total_commission", label: "Komisyon (₺)", type: "number" },
+  { id: "total_cargo", label: "Kargo (₺)", type: "number" },
+  { id: "total_profit", label: "Kâr Tutarı (₺)", type: "number" },
+  { id: "profit_margin", label: "Kâr Marjı (%)", type: "number" },
+];
+
 export default function CategoryAnalysisPage() {
   const [categories, setCategories] = useState<CategoryAnalysis[]>([]);
   const [loading, setLoading] = useState(true);
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+
+  // Date Range State
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: subDays(new Date(), 30),
+    to: new Date(),
+  });
+
+  // Table Filtering State
+  const [showFilter, setShowFilter] = useState(false);
+  const [tableFilter, setTableFilter] = useState<FilterState | null>(null);
 
   useEffect(() => {
-    fetchCategories();
-  }, []);
+    handleDateFilter();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date]);
 
   const fetchCategories = async (minDate?: string, maxDate?: string) => {
     setLoading(true);
@@ -46,15 +71,17 @@ export default function CategoryAnalysisPage() {
     }
   };
 
-  const handleFilter = () => {
-    if (startDate && endDate) {
-      fetchCategories(startDate, endDate);
+  const handleDateFilter = () => {
+    if (date?.from && date?.to) {
+      fetchCategories(format(date.from, "yyyy-MM-dd"), format(date.to, "yyyy-MM-dd"));
     } else {
       fetchCategories();
     }
   };
 
-  // Summary KPIs
+  const filteredCategories = applyTableFilter(categories, tableFilter);
+
+  // Summary KPIs based on filtered data (or raw data depending on preference, usually raw data for top KPIs is better, but doing it on filtered is fine too. Let's do raw for full range insight)
   const totalSales = categories.reduce((s, c) => s + parseFloat(c.total_sales_amount), 0);
   const totalProfit = categories.reduce((s, c) => s + parseFloat(c.total_profit), 0);
   const totalSold = categories.reduce((s, c) => s + c.total_sold_quantity, 0);
@@ -62,7 +89,7 @@ export default function CategoryAnalysisPage() {
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6">
         <div className="flex items-center gap-3">
           <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
             <Layers className="w-5 h-5 text-indigo-400" />
@@ -72,35 +99,42 @@ export default function CategoryAnalysisPage() {
             <p className="text-xs text-white/40 mt-0.5">Kategorilere göre satış ve kârlılık dağılımı</p>
           </div>
         </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <DatePickerWithRange date={date} setDate={setDate} />
+          <button
+            onClick={handleDateFilter}
+            className="flex items-center justify-center w-10 h-10 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors shadow-lg shadow-indigo-900/20"
+            title="Verileri Güncelle"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+
+          <div className="w-px h-8 bg-white/10 mx-1 hidden sm:block"></div>
+
+          <button
+            onClick={() => setShowFilter(!showFilter)}
+            className={clsx(
+              "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border h-10",
+              showFilter || tableFilter
+                ? "bg-indigo-600/20 text-indigo-400 border-indigo-500/30 ring-1 ring-indigo-500/10"
+                : "bg-navy-800 hover:bg-navy-700 text-white/90 border-white/5"
+            )}
+          >
+            <Filter className="w-4 h-4" />
+            Tabloyu Filtrele {(tableFilter) && <span className="w-2 h-2 rounded-full bg-indigo-500 ml-1"></span>}
+          </button>
+        </div>
       </div>
 
-      {/* Date Filter Bar */}
-      <div className="bg-navy-900 border border-white/5 rounded-xl p-4 mb-6 flex flex-wrap items-center gap-4">
-        <div className="flex items-center gap-2">
-          <Calendar className="w-4 h-4 text-white/40" />
-          <span className="text-sm text-white/50 font-medium">Tarih Aralığı:</span>
+      {showFilter && (
+        <div className="mb-6">
+          <TableFilter
+            columns={FILTER_COLUMNS}
+            onApply={(f) => setTableFilter(f)}
+            onClose={() => setShowFilter(false)}
+          />
         </div>
-        <input
-          type="date"
-          value={startDate}
-          onChange={(e) => setStartDate(e.target.value)}
-          className="bg-navy-800 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 focus:outline-none focus:border-blue-500/50 transition-colors"
-        />
-        <span className="text-white/30">—</span>
-        <input
-          type="date"
-          value={endDate}
-          onChange={(e) => setEndDate(e.target.value)}
-          className="bg-navy-800 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 focus:outline-none focus:border-blue-500/50 transition-colors"
-        />
-        <button
-          onClick={handleFilter}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-        >
-          <Filter className="w-4 h-4" />
-          Filtrele
-        </button>
-      </div>
+      )}
 
       {/* Summary Cards */}
       {!loading && categories.length > 0 && (
@@ -149,14 +183,14 @@ export default function CategoryAnalysisPage() {
                     </div>
                   </td>
                 </tr>
-              ) : categories.length === 0 ? (
+              ) : filteredCategories.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-6 py-8 text-center text-white/50">
-                    Henüz kayıtlı kategori verisi bulunmuyor. Trendyol senkronizasyonunu başlatın.
+                    Kayıt bulunamadı. Filtreleri temizlemeyi deneyin.
                   </td>
                 </tr>
               ) : (
-                categories.map((item) => {
+                filteredCategories.map((item) => {
                   const profitVal = parseFloat(item.total_profit);
                   const isProfitable = profitVal > 0;
                   const isLoss = profitVal < 0;

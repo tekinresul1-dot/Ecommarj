@@ -3,8 +3,13 @@
 import { useState, useEffect } from "react";
 import { formatCurrency, formatPercentage } from "@/lib/utils/format";
 import apiClient from "@/lib/api/client";
-import { Filter, Download } from "lucide-react";
+import { Filter, Download, RefreshCw } from "lucide-react";
 import clsx from "clsx";
+
+import { TableFilter, FilterState, FilterColumn, applyTableFilter } from "@/components/dashboard/TableFilter";
+import { DatePickerWithRange } from "@/components/dashboard/DateRangePicker";
+import { DateRange } from "react-day-picker";
+import { format, subDays } from "date-fns";
 
 interface ProductAnalysis {
   id: string; // barcode used as id
@@ -21,18 +26,47 @@ interface ProductAnalysis {
   profit_rate: string;
 }
 
+const FILTER_COLUMNS: FilterColumn[] = [
+  { id: "barcode", label: "Barkod", type: "text" },
+  { id: "title", label: "Ürün Adı", type: "text" },
+  { id: "model_code", label: "Model Kodu", type: "text" },
+  { id: "category", label: "Kategori", type: "text" },
+  { id: "stock", label: "Stok", type: "number" },
+  { id: "total_sold_quantity", label: "Satılan Adet", type: "number" },
+  { id: "total_sales_amount", label: "Satış Tutarı (₺)", type: "number" },
+  { id: "total_profit", label: "Kâr Tutarı (₺)", type: "number" },
+  { id: "profit_rate", label: "Kâr Oranı (%)", type: "number" },
+  { id: "profit_margin", label: "Kâr Marjı (%)", type: "number" },
+];
+
 export default function ProductAnalysisPage() {
   const [products, setProducts] = useState<ProductAnalysis[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchProducts();
-  }, []);
+  // Date Range State
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: subDays(new Date(), 30),
+    to: new Date(),
+  });
 
-  const fetchProducts = async () => {
+  // Filtering State
+  const [showFilter, setShowFilter] = useState(false);
+  const [tableFilter, setTableFilter] = useState<FilterState | null>(null);
+
+  useEffect(() => {
+    handleDateFilter();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date]);
+
+  const fetchProducts = async (minDate?: string, maxDate?: string) => {
+    setLoading(true);
     try {
-      const result = await apiClient.get<ProductAnalysis[]>("/reports/product-analysis/");
-      if (result.ok) {
+      let url = "/reports/product-analysis/";
+      if (minDate && maxDate) {
+        url += `?min_date=${minDate}&max_date=${maxDate}`;
+      }
+      const result = await apiClient.get<ProductAnalysis[]>(url);
+      if (result.ok && result.data) {
         setProducts(result.data);
       }
     } catch (error) {
@@ -42,21 +76,60 @@ export default function ProductAnalysisPage() {
     }
   };
 
+  const handleDateFilter = () => {
+    if (date?.from && date?.to) {
+      fetchProducts(format(date.from, "yyyy-MM-dd"), format(date.to, "yyyy-MM-dd"));
+    } else {
+      fetchProducts();
+    }
+  };
+
+  const filteredProducts = applyTableFilter(products, tableFilter);
+
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6">
         <h1 className="text-2xl font-bold text-white tracking-tight">Ürün Analizi</h1>
-        <div className="flex gap-3">
-          <button className="flex items-center gap-2 bg-navy-800 hover:bg-navy-700 text-white/90 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-white/5">
-            <Filter className="w-4 h-4" />
-            Filtrele
+        <div className="flex flex-wrap items-center gap-3">
+          <DatePickerWithRange date={date} setDate={setDate} />
+          <button
+            onClick={handleDateFilter}
+            className="flex items-center justify-center w-10 h-10 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors shadow-lg shadow-blue-900/20"
+            title="Verileri Güncelle"
+          >
+            <RefreshCw className="w-4 h-4" />
           </button>
-          <button className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-green-900/20">
+
+          <div className="w-px h-8 bg-white/10 mx-1 hidden sm:block"></div>
+
+          <button
+            onClick={() => setShowFilter(!showFilter)}
+            className={clsx(
+              "flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border h-10",
+              showFilter || tableFilter
+                ? "bg-blue-600/20 text-blue-400 border-blue-500/30 ring-1 ring-blue-500/10"
+                : "bg-navy-800 hover:bg-navy-700 text-white/90 border-white/5"
+            )}
+          >
+            <Filter className="w-4 h-4" />
+            Tabloda Ara {(tableFilter) && <span className="w-2 h-2 rounded-full bg-blue-500 ml-1"></span>}
+          </button>
+          <button className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-green-900/20 h-10">
             <Download className="w-4 h-4" />
-            Raporu İndir
+            İndir
           </button>
         </div>
       </div>
+
+      {showFilter && (
+        <div className="mb-4">
+          <TableFilter
+            columns={FILTER_COLUMNS}
+            onApply={(f) => setTableFilter(f)}
+            onClose={() => setShowFilter(false)}
+          />
+        </div>
+      )}
 
       <div className="bg-navy-900 rounded-xl border border-white/5 overflow-hidden">
         <div className="overflow-x-auto">
@@ -86,14 +159,14 @@ export default function ProductAnalysisPage() {
                     </div>
                   </td>
                 </tr>
-              ) : products.length === 0 ? (
+              ) : filteredProducts.length === 0 ? (
                 <tr>
                   <td colSpan={11} className="px-6 py-8 text-center text-white/50">
-                    Henüz kayıtlı analiz verisi bulunmuyor.
+                    Ürün bulunamadı. Filtreleri temizlemeyi deneyin.
                   </td>
                 </tr>
               ) : (
-                products.map((item) => {
+                filteredProducts.map((item) => {
                   const profitVal = parseFloat(item.total_profit);
                   const lossVal = parseFloat(item.return_cargo_loss);
                   const isProfitable = profitVal > 0;

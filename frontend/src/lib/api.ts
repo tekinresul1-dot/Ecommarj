@@ -35,7 +35,11 @@ export const api = {
             if (res.status === 401 && !cleanEndpoint.includes("/auth/")) {
                 console.error("401 Unauthorized from API. Redirecting to login. Endpoint:", cleanEndpoint);
                 localStorage.removeItem("access_token");
-                window.location.href = "/giris";
+                if (typeof window !== "undefined" && window.location.pathname !== "/giris") {
+                    if (!window.location.search.includes("session_expired")) {
+                        window.location.href = "/giris?session_expired=true";
+                    }
+                }
             }
             const text = await res.text();
             console.log("API_BASE:", API_BASE, "endpoint:", cleanEndpoint); console.error(`API Error on GET ${endpoint} (${res.status}): ${text.substring(0, 150)}`);
@@ -62,7 +66,11 @@ export const api = {
         if (!res.ok) {
             if (res.status === 401 && !cleanEndpoint.includes("/auth/")) {
                 localStorage.removeItem("access_token");
-                window.location.href = "/giris";
+                if (typeof window !== "undefined" && window.location.pathname !== "/giris") {
+                    if (!window.location.search.includes("session_expired")) {
+                        window.location.href = "/giris?session_expired=true";
+                    }
+                }
             }
 
             let errorData = null;
@@ -119,7 +127,11 @@ export const api = {
         if (!res.ok) {
             if (res.status === 401 && !cleanEndpoint.includes("/auth/")) {
                 localStorage.removeItem("access_token");
-                window.location.href = "/giris";
+                if (typeof window !== "undefined" && window.location.pathname !== "/giris") {
+                    if (!window.location.search.includes("session_expired")) {
+                        window.location.href = "/giris?session_expired=true";
+                    }
+                }
             }
 
             let errorData = null;

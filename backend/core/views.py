@@ -840,7 +840,7 @@ class OrderListView(APIView):
 
             data.append({
                 "id": order.id,
-                "order_number": order.marketplace_order_id,
+                "order_number": order.order_number,
                 "order_date": format_date_tr(order.order_date),
                 "status": order.status,
                 "is_micro_export": order.channel == 'micro_export',

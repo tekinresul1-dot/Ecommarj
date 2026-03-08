@@ -54,7 +54,11 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
         if (!response.ok) {
             if (response.status === 401 && !cleanEndpoint.includes("/auth/")) {
                 localStorage.removeItem("access_token");
-                window.location.href = "/giris";
+                if (typeof window !== "undefined" && window.location.pathname !== "/giris") {
+                    if (!window.location.search.includes("session_expired")) {
+                        window.location.href = "/giris?session_expired=true";
+                    }
+                }
             }
             throw new Error(data.message || data.error || `HTTP error! status: ${response.status}`);
         }

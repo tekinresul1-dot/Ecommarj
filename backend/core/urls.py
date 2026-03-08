@@ -7,6 +7,11 @@ from .views import (
     CategoryAnalysisView, ReturnAnalysisView, AdsAnalysisView,
     ProductExcelExportView, ProductExcelImportView,
 )
+from .sync_views import (
+    TrendyolFullSyncView, TrendyolIncrementalSyncView,
+    TrendyolBackfillSyncView, TrendyolClaimsSyncView,
+    TrendyolWebhookView, SyncStatusView,
+)
 
 urlpatterns = [
     # Auth
@@ -16,7 +21,17 @@ urlpatterns = [
 
     # Dashboard & Reports
     path("dashboard/overview/", DashboardOverviewView.as_view(), name="dashboard-overview"),
+    path("dashboard/sync-status/", SyncStatusView.as_view(), name="sync-status"),
     path("sync/run/", TriggerSyncView.as_view(), name="sync-run"),
+    
+    # Sync — New endpoints
+    path("sync/trendyol/orders/full/", TrendyolFullSyncView.as_view(), name="sync-full"),
+    path("sync/trendyol/orders/incremental/", TrendyolIncrementalSyncView.as_view(), name="sync-incremental"),
+    path("sync/trendyol/orders/backfill/", TrendyolBackfillSyncView.as_view(), name="sync-backfill"),
+    path("sync/trendyol/claims/", TrendyolClaimsSyncView.as_view(), name="sync-claims"),
+    
+    # Webhook
+    path("integrations/trendyol/webhook/", TrendyolWebhookView.as_view(), name="trendyol-webhook"),
     
     # Settings & Data
     path("integrations/trendyol/test-connection/", TrendyolTestConnectionView.as_view(), name="trendyol-test-conn"),
@@ -33,3 +48,4 @@ urlpatterns = [
     path("reports/ads/", AdsAnalysisView.as_view(), name="ads-analysis"),
     path("reports/<str:report_type>/", MockReportsView.as_view(), name="reports-mock"),
 ]
+

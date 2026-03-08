@@ -3,8 +3,12 @@
 import { useState, useEffect } from "react";
 import { formatCurrency, formatPercentage } from "@/lib/utils/format";
 import apiClient from "@/lib/api/client";
-import { Filter, Calendar, Megaphone, TrendingUp, DollarSign, BarChart3, Target } from "lucide-react";
+import { Filter, Calendar, Megaphone, TrendingUp, DollarSign, BarChart3, Target, RefreshCw } from "lucide-react";
 import clsx from "clsx";
+
+import { DatePickerWithRange } from "@/components/dashboard/DateRangePicker";
+import { DateRange } from "react-day-picker";
+import { format, subDays } from "date-fns";
 
 interface AdsData {
   total_ads_cost: string;
@@ -18,12 +22,17 @@ interface AdsData {
 export default function AdsAnalysisPage() {
   const [data, setData] = useState<AdsData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+
+  // Date Range State
+  const [date, setDate] = useState<DateRange | undefined>({
+    from: subDays(new Date(), 30),
+    to: new Date(),
+  });
 
   useEffect(() => {
-    fetchAds();
-  }, []);
+    handleDateFilter();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [date]);
 
   const fetchAds = async (minDate?: string, maxDate?: string) => {
     setLoading(true);
@@ -43,9 +52,9 @@ export default function AdsAnalysisPage() {
     }
   };
 
-  const handleFilter = () => {
-    if (startDate && endDate) {
-      fetchAds(startDate, endDate);
+  const handleDateFilter = () => {
+    if (date?.from && date?.to) {
+      fetchAds(format(date.from, "yyyy-MM-dd"), format(date.to, "yyyy-MM-dd"));
     } else {
       fetchAds();
     }
@@ -53,7 +62,7 @@ export default function AdsAnalysisPage() {
 
   return (
     <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6">
         <div className="flex items-center gap-3">
           <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/20">
             <Megaphone className="w-5 h-5 text-purple-400" />
@@ -63,34 +72,16 @@ export default function AdsAnalysisPage() {
             <p className="text-xs text-white/40 mt-0.5">Reklam harcamaları, satış ve kârlılık performansı</p>
           </div>
         </div>
-      </div>
-
-      {/* Date Filter Bar */}
-      <div className="bg-navy-900 border border-white/5 rounded-xl p-4 mb-6 flex flex-wrap items-center gap-4">
-        <div className="flex items-center gap-2">
-          <Calendar className="w-4 h-4 text-white/40" />
-          <span className="text-sm text-white/50 font-medium">Tarih Aralığı:</span>
+        <div className="flex flex-wrap items-center gap-3">
+          <DatePickerWithRange date={date} setDate={setDate} />
+          <button
+            onClick={handleDateFilter}
+            className="flex items-center justify-center w-10 h-10 bg-purple-600 hover:bg-purple-500 text-white rounded-lg transition-colors shadow-lg shadow-purple-900/20"
+            title="Verileri Güncelle"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
         </div>
-        <input
-          type="date"
-          value={startDate}
-          onChange={(e) => setStartDate(e.target.value)}
-          className="bg-navy-800 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 focus:outline-none focus:border-purple-500/50 transition-colors"
-        />
-        <span className="text-white/30">—</span>
-        <input
-          type="date"
-          value={endDate}
-          onChange={(e) => setEndDate(e.target.value)}
-          className="bg-navy-800 border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 focus:outline-none focus:border-purple-500/50 transition-colors"
-        />
-        <button
-          onClick={handleFilter}
-          className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-        >
-          <Filter className="w-4 h-4" />
-          Filtrele
-        </button>
       </div>
 
       {loading ? (

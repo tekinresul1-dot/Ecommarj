@@ -116,7 +116,7 @@ class ProfitCalculator:
         net_kdv = q(satis_kdv - (alis_kdv + komisyon_kdv + kargo_kdv + hizmet_bedeli_kdv))
 
         # 7. Stopaj
-        stopaj = q((active_sale_price / Decimal("1.20")) * Decimal("0.01"))
+        stopaj = q((active_sale_price / sale_kdv_factor) * Decimal("0.01"))
 
         # 8. Net Kâr
         net_profit = q(active_sale_price - (product_cost + commission_cost + cargo_cost + service_fee + intl_service_fee + stopaj + net_kdv + return_loss))
@@ -200,7 +200,7 @@ class ProfitCalculator:
                 vat_rate = product.vat_rate if product.vat_rate > Decimal("0.00") else vat_rate
             
             # Variant-level cost overrides Transactions if Transaction isn't present
-            if product_cost == Decimal("0.00") and variant.cost_price > Decimal("0.00"):
+            if product_cost == Decimal("0.00") and variant.cost_price is not None and variant.cost_price > Decimal("0.00"):
                 product_cost = variant.cost_price
                 # Not: Alış KDV'si için variant.cost_vat_rate kullanılabilir, fakat şu an calculate_from_raw statik %20 alis_kdv hesaplıyor. İleride orası da dinamikleştirilebilir.
             
@@ -211,9 +211,12 @@ class ProfitCalculator:
                 # Desi önceliği: Varyantta yazan desi, yoksa Üründe yazan desi
                 active_desi = variant.desi if variant.desi is not None else product.desi
                 
+                # Siparişin kendi kargo firması varsa onu kullan, yoksa ürünün varsayılanını kullan
+                carrier = order_item.order.cargo_provider_name if order_item.order.cargo_provider_name else product.default_carrier
+                
                 # TRENDYOL BAREM DESTEK (26 Mart 2026) KONTROLÜ
                 barem_applied = False
-                if sale_price_gross < Decimal("350.00") and active_desi <= Decimal("10.00"):
+                if active_desi is not None and sale_price_gross < Decimal("350.00") and active_desi <= Decimal("10.00"):
                     # Table seçimi
                     target_table = "table1" if product.fast_delivery else "table2"
                     
@@ -221,8 +224,7 @@ class ProfitCalculator:
                     price_range = "0_199" if sale_price_gross < Decimal("200.00") else "200_349"
                     
                     # Taşıyıcı kontrolü (Eğer tabloda yoksa barem destek uygulanmaz, normal fiyata düşer)
-                    carrier = product.default_carrier
-                    if carrier in TRENDYOL_BAREM_RATES[target_table][price_range]:
+                    if carrier in TRENDYOL_BAREM_RATES.get(target_table, {}).get(price_range, {}):
                         barem_price_kdv_haric = TRENDYOL_BAREM_RATES[target_table][price_range][carrier]
                         cargo_cost = barem_price_kdv_haric * Decimal("1.20")
                         barem_applied = True
@@ -230,7 +232,7 @@ class ProfitCalculator:
                 # Barem desteğine uygun değilse veya taşıyıcı listede yoksa normal veritabanından(Excel) çek
                 if not barem_applied:
                     try:
-                        pricing = CargoPricing.objects.get(carrier_name=product.default_carrier, desi=active_desi)
+                        pricing = CargoPricing.objects.get(carrier_name=carrier, desi=active_desi)
                         # KDV Hariç fiyat üzerine %20 ekleyerek Gross kargo bedeli
                         cargo_cost = pricing.price_without_vat * Decimal("1.20")
                     except CargoPricing.DoesNotExist:

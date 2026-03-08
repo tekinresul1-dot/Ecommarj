@@ -22,6 +22,9 @@ class TrendyolAdapter:
     # Correct base URL per official Trendyol docs
     BASE_URL = "https://apigw.trendyol.com/integration"
 
+    # New TGO Base URL for Finance/CHE APIs post-2025 migration
+    TGO_BASE_URL = "https://api.tgoapis.com/integration"
+
     def __init__(self, api_key: str, api_secret: str, seller_id: str):
         self.api_key = api_key
         self.api_secret = api_secret
@@ -99,6 +102,17 @@ class TrendyolAdapter:
     # ------------------------------------------------------------------
     def fetch_orders(self, start_date_ms: int = None, end_date_ms: int = None, status: str = None) -> List[Dict[Any, Any]]:
         """Trendyol'dan sipariş listesini çeker."""
+        # Trendyol API limit: Max 30 days query range (Update March 2026)
+        if start_date_ms and end_date_ms:
+            thirty_days_ms = 30 * 24 * 60 * 60 * 1000
+            if (end_date_ms - start_date_ms) > thirty_days_ms:
+                logger.warning(
+                    f"[Trendyol Adapter] Date range too large. "
+                    f"Trendyol limits queries to 30 days. "
+                    f"Auto-adjusting start_date to 30 days prior to end_date."
+                )
+                start_date_ms = end_date_ms - thirty_days_ms
+                
         url = f"{self.BASE_URL}/order/sellers/{self.seller_id}/orders"
 
         params = {"size": 200}
@@ -219,3 +233,76 @@ class TrendyolAdapter:
         except requests.RequestException as e:
             logger.warning(f"Trendyol Settlements fetch error (non-critical): {e}")
             return []  # Non-critical — don't break sync for financial data
+
+    def fetch_other_financials(self, start_date_ms: int = None, end_date_ms: int = None) -> List[Dict[Any, Any]]:
+        """Other Financials verilerini (Örn. Kargo Faturaları/DeductionInvoices) çeker."""
+        url = f"{self.TGO_BASE_URL}/finance/che/sellers/{self.seller_id}/otherfinancials"
+        params = {"size": 100}
+
+        if start_date_ms:
+            params["startDate"] = start_date_ms
+        if end_date_ms:
+            params["endDate"] = end_date_ms
+
+        all_content = []
+        page = 0
+        try:
+            while page < 5:
+                params["page"] = page
+                response = self._make_request(url, params, operation="OtherFinancials")
+                
+                if response.status_code == 556:
+                    logger.warning("[Trendyol OtherFinancials] Service unavailable (556). Skipping.")
+                    return []
+                
+                response.raise_for_status()
+                data = response.json()
+                content = data.get("content", [])
+
+                if not content:
+                    break
+
+                all_content.extend(content)
+                page += 1
+            
+            logger.info(f"[Trendyol OtherFinancials] Fetched {len(all_content)} items")
+            return all_content
+
+        except requests.RequestException as e:
+            logger.warning(f"Trendyol OtherFinancials fetch error (non-critical): {e}")
+            return []
+
+    def fetch_cargo_invoice_items(self, invoice_serial_number: str) -> List[Dict[Any, Any]]:
+        """Belirli bir Kargo Faturasının (DeductionInvoices) kalemlerini (items) çeker."""
+        # URL structure: /finance/che/sellers/{sellerId}/cargo-invoice/{invoiceSerialNumber}/items
+        url = f"{self.TGO_BASE_URL}/finance/che/sellers/{self.seller_id}/cargo-invoice/{invoice_serial_number}/items"
+        params = {"size": 500}
+        
+        all_content = []
+        page = 0
+        try:
+            while page < 5:
+                params["page"] = page
+                response = self._make_request(url, params, operation=f"CargoInvoiceItems - {invoice_serial_number}")
+                
+                if response.status_code == 556:
+                    logger.warning("[Trendyol CargoInvoiceItems] Service unavailable (556). Skipping.")
+                    return []
+                
+                response.raise_for_status()
+                data = response.json()
+                content = data.get("content", [])
+
+                if not content:
+                    break
+
+                all_content.extend(content)
+                page += 1
+                
+            logger.info(f"[Trendyol CargoInvoiceItems] Fetched {len(all_content)} cargo items for invoice {invoice_serial_number}")
+            return all_content
+
+        except requests.RequestException as e:
+            logger.warning(f"Trendyol CargoInvoiceItems fetch error for {invoice_serial_number}: {e}")
+            return []
+

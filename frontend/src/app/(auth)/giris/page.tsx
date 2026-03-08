@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useState, FormEvent, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
@@ -14,6 +14,14 @@ export default function LoginPage() {
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [toast, setToast] = useState("");
     const [toastType, setToastType] = useState<"success" | "error">("success");
+
+    // If already logged in, go straight to dashboard
+    useEffect(() => {
+        const token = localStorage.getItem("access_token");
+        if (token) {
+            router.replace("/dashboard");
+        }
+    }, [router]);
 
     function validate() {
         const e: Record<string, string> = {};

@@ -2,6 +2,7 @@ import logging
 from decimal import Decimal
 from datetime import datetime, timezone as dt_timezone, timedelta
 from django.utils import timezone
+from django.db.models import Q
 from core.models import (
     Organization, MarketplaceAccount, Product, Order, OrderItem,
     FinancialTransaction, FinancialTransactionType, ProductVariant
@@ -213,11 +214,11 @@ class TrendyolSyncService:
             
             order, _ = Order.objects.update_or_create(
                 organization=self.organization,
-                marketplace_order_id=shipment_package_id,  # UNIQUE per package
-                package_id=shipment_package_id,            # MUST match unique_together constraints
+                package_id=shipment_package_id,            # Match unique_together exactly
                 defaults={
                     "marketplace_account": self.account,
-                    "order_number": order_number,          # Keep this updated just in case
+                    "marketplace_order_id": shipment_package_id, # Moved from lookup to defaults
+                    "order_number": order_number,
                     "order_date": order_date,
                     "status": mapped_status,
                     "channel": Order.Channel.MICRO_EXPORT if is_micro else Order.Channel.TRENDYOL,
@@ -303,8 +304,9 @@ class TrendyolSyncService:
             
             # Find matching order
             order = Order.objects.filter(
-                organization=self.organization,
-                marketplace_order_id=str(order_number)
+                organization=self.organization
+            ).filter(
+                Q(order_number=str(order_number)) | Q(marketplace_order_id=str(order_number))
             ).first()
             
             if not order:
@@ -406,32 +408,45 @@ class TrendyolSyncService:
         for inv_id in invoice_ids:
             try:
                 cargo_items = self.adapter.fetch_cargo_invoice_items(inv_id)
+                if not cargo_items:
+                    continue
+                
                 for item in cargo_items:
                     order_number = item.get("orderNumber")
                     if not order_number:
                         continue
 
                     order = Order.objects.filter(
-                        organization=self.organization,
-                        marketplace_order_id=str(order_number)
+                        organization=self.organization
+                    ).filter(
+                        Q(order_number=str(order_number)) | Q(marketplace_order_id=str(order_number))
                     ).first()
 
                     if not order:
+                        # logger.debug(f"Order {order_number} not found, skipping cargo item.")
                         continue
 
-                    # Kargo faturasında birden fazla kalem olabilir (farklı paketler)
-                    # Ama biz genel bir SHIPPING_FEE atıyoruz
                     cargo_amount = Decimal(str(item.get("amount", "0")))
                     if cargo_amount > 0:
                         first_item = order.items.first()
                         if first_item:
+                            # Use invoice date if available, else order date
+                            invoice_date_str = item.get("invoiceDate")
+                            if invoice_date_str:
+                                try:
+                                    occurred_at = timezone.make_aware(datetime.fromisoformat(invoice_date_str.replace("Z", "+00:00")))
+                                except Exception:
+                                    occurred_at = order.order_date or timezone.now()
+                            else:
+                                occurred_at = order.order_date or timezone.now()
+
                             FinancialTransaction.objects.update_or_create(
                                 organization=self.organization,
                                 order_item_ref=first_item,
                                 transaction_type=FinancialTransactionType.SHIPPING_FEE,
                                 defaults={
                                     "amount": cargo_amount,
-                                    "occurred_at": order.order_date or timezone.now(),
+                                    "occurred_at": occurred_at,
                                     "raw_payload": item,
                                 }
                             )
@@ -439,4 +454,4 @@ class TrendyolSyncService:
             except Exception as e:
                 logger.warning(f"Failed to process cargo invoice {inv_id}: {e}")
 
-        logger.info(f"Cargo Invoices sync complete. Processed {processed_count} individual package fees.")
+        logger.info(f"Cargo Invoices sync complete. Processed {processed_count} items from {len(invoice_ids)} invoices.")

@@ -42,11 +42,13 @@ export function DatePickerWithRange({
 }: DatePickerWithRangeProps) {
     const [isOpen, setIsOpen] = React.useState(false);
     const [tempDate, setTempDate] = React.useState<DateRange | undefined>(date);
+    const [activePreset, setActivePreset] = React.useState<string | null>(null);
 
     // When popover opens, sync temp date with actual date
     React.useEffect(() => {
         if (isOpen) {
             setTempDate(date);
+            setActivePreset(null);
         }
     }, [isOpen, date]);
 
@@ -63,11 +65,11 @@ export function DatePickerWithRange({
                         id="date"
                         variant={"outline"}
                         className={cn(
-                            "w-full sm:w-[280px] justify-start text-left font-normal bg-navy-950 border-white/10 text-white/90 hover:bg-white/5 hover:text-white hover:border-white/20 h-11 transition-colors",
-                            !date && "text-muted-foreground"
+                            "w-full sm:w-[280px] justify-start text-left font-normal bg-navy-950/80 border-white/10 backdrop-blur-sm text-white/90 data-[state=open]:bg-white/5 data-[state=open]:border-blue-500/50 hover:bg-white/10 hover:text-white hover:border-white/20 h-10 transition-all duration-200",
+                            !date && "text-white/50"
                         )}
                     >
-                        <CalendarIcon className="mr-2 h-4 w-4 text-blue-400" />
+                        <CalendarIcon className="mr-2 h-4 w-4 text-blue-400 group-hover:text-blue-300" />
                         {date?.from ? (
                             date.to ? (
                                 <>
@@ -83,67 +85,75 @@ export function DatePickerWithRange({
                     </Button>
                 </PopoverTrigger>
                 <PopoverContent
-                    className="w-auto p-0 bg-navy-950 border-white/10 text-white shadow-2xl rounded-2xl overflow-hidden"
+                    className="w-auto p-0 bg-navy-950 border-white/10 text-white shadow-2xl rounded-xl overflow-hidden animate-in zoom-in-95 duration-200"
                     align="end"
                 >
                     <div className="flex flex-col sm:flex-row">
                         {/* Presets Sidebar */}
-                        <div className="flex sm:flex-col gap-1 p-2 border-b sm:border-b-0 sm:border-r border-white/10 bg-navy-900/50 min-w-[120px] overflow-x-auto sm:overflow-x-visible">
-                            <div className="text-[11px] font-semibold text-white/50 uppercase tracking-wider mb-1 mt-1 px-3 hidden sm:block">Hızlı Seçim</div>
-                            {PRESETS.map((preset) => (
-                                <button
-                                    key={preset.label}
-                                    onClick={() => setTempDate(preset.getValue())}
-                                    className="px-3 py-1.5 text-[13px] text-left rounded-md hover:bg-white/10 transition-colors whitespace-nowrap sm:whitespace-normal text-white/80 hover:text-white"
-                                >
-                                    {preset.label}
-                                </button>
-                            ))}
+                        <div className="flex sm:flex-col p-3 border-b sm:border-b-0 sm:border-r border-white/10 bg-black/20 min-w-[140px] overflow-x-auto sm:overflow-x-visible gap-1.5 align-top">
+                            <div className="text-[11px] font-semibold text-white/40 uppercase tracking-widest mb-2 px-2 hidden sm:block">Hızlı Seçim</div>
+                            {PRESETS.map((preset) => {
+                                const isActive = activePreset === preset.label;
+                                return (
+                                    <button
+                                        key={preset.label}
+                                        onClick={() => {
+                                            setTempDate(preset.getValue());
+                                            setActivePreset(preset.label);
+                                        }}
+                                        className={cn(
+                                            "px-3 py-2 text-[13px] text-left rounded-lg transition-all duration-200 whitespace-nowrap sm:whitespace-normal font-medium",
+                                            isActive
+                                                ? "bg-blue-600/20 text-blue-400 ring-1 ring-blue-500/30"
+                                                : "text-white/70 hover:bg-white/10 hover:text-white"
+                                        )}
+                                    >
+                                        {preset.label}
+                                    </button>
+                                );
+                            })}
                         </div>
 
                         {/* Calendar View */}
-                        <div className="p-2 sm:p-3">
+                        <div className="p-4 bg-navy-950">
                             <Calendar
                                 initialFocus
                                 mode="range"
                                 defaultMonth={tempDate?.from}
                                 selected={tempDate}
-                                onSelect={setTempDate}
+                                onSelect={(range) => {
+                                    setTempDate(range);
+                                    setActivePreset(null);
+                                }}
                                 numberOfMonths={2}
                                 locale={tr}
                                 className="bg-transparent text-white"
-                                classNames={{
-                                    months: "flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0",
-                                    month: "space-y-3",
-                                    caption: "flex justify-center pt-1 relative items-center",
-                                    caption_label: "text-[13px] font-medium",
-                                    nav: "space-x-1 flex items-center bg-white/5 rounded-md p-0.5",
-                                    nav_button: "h-6 w-6 bg-transparent p-0 opacity-50 hover:opacity-100 hover:bg-white/10 rounded-sm transition-colors flex items-center justify-center",
-                                    nav_button_previous: "absolute left-2",
-                                    nav_button_next: "absolute right-2",
-                                    table: "w-full border-collapse space-y-1",
-                                    head_row: "flex",
-                                    head_cell: "text-white/50 rounded-md w-7 font-normal text-[0.7rem] capitalize",
-                                    row: "flex w-full mt-1.5",
-                                    cell: "h-7 w-7 text-center text-[13px] p-0 relative [&:has([aria-selected].day-range-end)]:rounded-r-md [&:has([aria-selected].day-outside)]:bg-white/5 [&:has([aria-selected])]:bg-purple-600/20 first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20",
-                                    day: "h-7 w-7 p-0 font-normal aria-selected:opacity-100 rounded-md hover:bg-white/10 transition-colors",
-                                    day_range_end: "day-range-end",
-                                    day_selected: "bg-purple-600 text-white hover:bg-purple-500 hover:text-white focus:bg-purple-600 focus:text-white",
-                                    day_today: "bg-white/5 text-white font-bold",
-                                    day_outside: "day-outside text-white/30 opacity-50 aria-selected:bg-white/10 aria-selected:text-white/50 aria-selected:opacity-30",
-                                    day_disabled: "text-white/30 opacity-50",
-                                    day_range_middle: "aria-selected:bg-purple-600/20 aria-selected:text-purple-200 aria-selected:rounded-none",
-                                    day_hidden: "invisible",
-                                }}
                             />
 
-                            <div className="flex justify-end gap-2 pt-3 border-t border-white/10 mt-1">
-                                <Button size="sm" variant="ghost" className="text-[13px] text-white/70 hover:text-white hover:bg-white/5 h-8 px-3" onClick={() => setIsOpen(false)}>
-                                    İptal
-                                </Button>
-                                <Button size="sm" className="h-8 px-4 text-[13px] bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white shadow-lg border-0" onClick={handleApply}>
-                                    Filtrele
-                                </Button>
+                            <div className="flex items-center justify-between pt-4 border-t border-white/10 mt-4">
+                                <div className="text-[13px] text-white/50 font-medium bg-black/20 px-3 py-1.5 rounded-md border border-white/5">
+                                    {tempDate?.from ? (
+                                        tempDate.to ? (
+                                            <>
+                                                <span className="text-white/80">{format(tempDate.from, "dd MMM yyyy", { locale: tr })}</span>
+                                                <span className="mx-2 text-white/30">→</span>
+                                                <span className="text-white/80">{format(tempDate.to, "dd MMM yyyy", { locale: tr })}</span>
+                                            </>
+                                        ) : (
+                                            <span className="text-white/80">{format(tempDate.from, "dd MMM yyyy", { locale: tr })}</span>
+                                        )
+                                    ) : (
+                                        "Lütfen bir tarih seçin"
+                                    )}
+                                </div>
+                                <div className="flex justify-end gap-2">
+                                    <Button size="sm" variant="ghost" className="text-[13px] text-white/70 hover:text-white hover:bg-white/10 h-8 px-4 rounded-md" onClick={() => setIsOpen(false)}>
+                                        İptal
+                                    </Button>
+                                    <Button size="sm" className="h-8 px-5 text-[13px] font-medium bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20 border-0 rounded-md transition-all" onClick={handleApply}>
+                                        Uygula
+                                    </Button>
+                                </div>
                             </div>
                         </div>
                     </div>

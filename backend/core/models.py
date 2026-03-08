@@ -173,6 +173,8 @@ class Order(TimestampedModel):
         DELIVERED = "Delivered", "Teslim Edildi"
         CANCELLED = "Cancelled", "İptal"
         RETURNED = "Returned", "İade"
+        UNDELIVERED = "UnDelivered", "Teslim Edilemedi"
+        UNSUPPLIED = "UnSupplied", "Tedarik Edilemedi"
         
     class Channel(models.TextChoices):
         TRENDYOL = "trendyol", "Trendyol"
@@ -181,18 +183,37 @@ class Order(TimestampedModel):
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="orders")
     marketplace_account = models.ForeignKey(MarketplaceAccount, on_delete=models.CASCADE, related_name="orders")
     marketplace_order_id = models.CharField("Pazaryeri Sipariş No", max_length=100, db_index=True)
+    package_id = models.CharField("Paket ID (shipmentPackageId)", max_length=100, db_index=True, default="")
+    order_number = models.CharField("Trendyol Sipariş Numarası", max_length=100, db_index=True, default="")
     order_date = models.DateTimeField("Sipariş Tarihi")
+    last_modified_date = models.DateTimeField("Son Değişiklik Tarihi", null=True, blank=True, db_index=True)
     status = models.CharField(max_length=30, choices=Status.choices)
+    previous_status = models.CharField("Önceki Durum", max_length=30, blank=True, default="")
+    status_changed_at = models.DateTimeField("Durum Değişim Tarihi", null=True, blank=True)
     channel = models.CharField(max_length=30, choices=Channel.choices, default=Channel.TRENDYOL)
-    country_code = models.CharField("Ülke Kodu", max_length=5, default="TR") # TR, AZ, AE, vb.
+    country_code = models.CharField("Ülke Kodu", max_length=5, default="TR")
+    
+    # Kargo bilgileri
+    cargo_provider_name = models.CharField("Kargo Firması", max_length=100, blank=True, default="")
+    cargo_tracking_number = models.CharField("Kargo Takip No", max_length=100, blank=True, default="")
+    
+    # Sync metadata
+    raw_payload_hash = models.CharField("Payload Hash", max_length=64, blank=True, default="")
+    last_synced_at = models.DateTimeField("Son Sync Zamanı", null=True, blank=True)
 
     class Meta:
         verbose_name = "Sipariş"
         verbose_name_plural = "Siparişler"
-        unique_together = [("organization", "marketplace_order_id")]
+        unique_together = [("organization", "package_id")]
+        indexes = [
+            models.Index(fields=["organization", "order_date"]),
+            models.Index(fields=["organization", "last_modified_date"]),
+            models.Index(fields=["organization", "status"]),
+        ]
 
     def __str__(self):
-        return f"Order #{self.marketplace_order_id}"
+        return f"Order #{self.marketplace_order_id} (Pkg: {self.package_id})"
+
 
 class OrderItem(TimestampedModel):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
@@ -330,7 +351,7 @@ class ProfitSnapshot(TimestampedModel):
 
 
 # ---------------------------------------------------------------------------
-# 7. Sync Jobs (Celery ile çalışacak senkron işler)
+# 7. Sync Infrastructure
 # ---------------------------------------------------------------------------
 
 class SyncJob(TimestampedModel):
@@ -338,6 +359,8 @@ class SyncJob(TimestampedModel):
         ORDERS = "orders", "Siparişler"
         PRODUCTS = "products", "Ürünler"
         FINANCE = "finance", "Finans / Hakediş"
+        CLAIMS = "claims", "İade / Claim"
+        RECONCILIATION = "reconciliation", "Reconciliation"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Bekliyor"
@@ -357,3 +380,107 @@ class SyncJob(TimestampedModel):
         verbose_name = "Senkronizasyon İşi"
         verbose_name_plural = "Senkronizasyon İşleri"
         ordering = ["-created_at"]
+
+
+class SyncCheckpoint(TimestampedModel):
+    """
+    Her hesap/sync tipi için son başarılı sync zamanını tutar.
+    Incremental sync bu checkpoint'ten başlar (overlap ile).
+    """
+    class SyncType(models.TextChoices):
+        ORDERS = "orders", "Siparişler"
+        CLAIMS = "claims", "İade / Claim"
+        PRODUCTS = "products", "Ürünler"
+
+    marketplace_account = models.ForeignKey(MarketplaceAccount, on_delete=models.CASCADE, related_name="sync_checkpoints")
+    sync_type = models.CharField(max_length=30, choices=SyncType.choices)
+    last_successful_sync_at = models.DateTimeField("Son Başarılı Sync")
+    last_fetched_modified_date = models.DateTimeField("Son Çekilen Modified Date", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Sync Checkpoint"
+        verbose_name_plural = "Sync Checkpoints"
+        unique_together = [("marketplace_account", "sync_type")]
+
+    def __str__(self):
+        return f"{self.marketplace_account} - {self.sync_type}: {self.last_successful_sync_at}"
+
+
+class SyncAuditLog(TimestampedModel):
+    """
+    Her sync çalışmasının detaylı audit kaydı.
+    """
+    class SyncMode(models.TextChoices):
+        FULL = "full", "Full Sync"
+        INCREMENTAL = "incremental", "Incremental Sync"
+        BACKFILL = "backfill", "Backfill"
+        RECONCILIATION = "reconciliation", "Reconciliation"
+        WEBHOOK = "webhook", "Webhook"
+
+    marketplace_account = models.ForeignKey(MarketplaceAccount, on_delete=models.CASCADE, related_name="sync_audit_logs")
+    sync_type = models.CharField(max_length=30)  # orders, claims, products
+    sync_mode = models.CharField(max_length=30, choices=SyncMode.choices)
+    started_at = models.DateTimeField()
+    finished_at = models.DateTimeField(null=True, blank=True)
+    
+    # Date range that was synced
+    date_range_start = models.DateTimeField(null=True, blank=True)
+    date_range_end = models.DateTimeField(null=True, blank=True)
+    
+    # Counters
+    total_fetched = models.IntegerField(default=0)
+    inserted = models.IntegerField(default=0)
+    updated = models.IntegerField(default=0)
+    skipped = models.IntegerField(default=0)
+    failed = models.IntegerField(default=0)
+    
+    # Result
+    success = models.BooleanField(default=False)
+    error_message = models.TextField(blank=True, default="")
+    duration_seconds = models.FloatField(default=0)
+
+    class Meta:
+        verbose_name = "Sync Audit Log"
+        verbose_name_plural = "Sync Audit Logs"
+        ordering = ["-started_at"]
+
+    def __str__(self):
+        status = "✅" if self.success else "❌"
+        return f"{status} {self.sync_mode} {self.sync_type} - {self.total_fetched} fetched"
+
+
+class ReturnClaim(TimestampedModel):
+    """
+    Trendyol getClaims endpoint'inden gelen iade/claim kayıtları.
+    """
+    class ClaimStatus(models.TextChoices):
+        CREATED = "Created", "Oluşturuldu"
+        IN_PROGRESS = "InProgress", "İşlemde"
+        RESOLVED = "Resolved", "Çözümlendi"
+        REJECTED = "Rejected", "Reddedildi"
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="return_claims")
+    marketplace_account = models.ForeignKey(MarketplaceAccount, on_delete=models.CASCADE, related_name="return_claims")
+    claim_id = models.CharField("Claim ID", max_length=100, db_index=True)
+    order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name="claims")
+    order_number = models.CharField("Sipariş No", max_length=100, blank=True, default="")
+    
+    claim_date = models.DateTimeField("Claim Tarihi", null=True, blank=True)
+    claim_status = models.CharField(max_length=30, choices=ClaimStatus.choices, default=ClaimStatus.CREATED)
+    reason = models.TextField("İade Nedeni", blank=True, default="")
+    
+    # Finansal
+    refund_amount = models.DecimalField("İade Tutarı", max_digits=12, decimal_places=2, default=0)
+    cargo_cost = models.DecimalField("Kargo Maliyeti", max_digits=12, decimal_places=2, default=0)
+    
+    raw_payload_hash = models.CharField("Payload Hash", max_length=64, blank=True, default="")
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "İade / Claim"
+        verbose_name_plural = "İade / Claim Kayıtları"
+        unique_together = [("organization", "claim_id")]
+
+    def __str__(self):
+        return f"Claim #{self.claim_id} - {self.claim_status}"
+

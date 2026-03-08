@@ -212,7 +212,24 @@ class ProfitCalculator:
                 active_desi = variant.desi if variant.desi is not None else product.desi
                 
                 # Siparişin kendi kargo firması varsa onu kullan, yoksa ürünün varsayılanını kullan
-                carrier = order_item.order.cargo_provider_name if order_item.order.cargo_provider_name else product.default_carrier
+                raw_carrier = order_item.order.cargo_provider_name if order_item.order.cargo_provider_name else product.default_carrier
+                
+                # Normalize carrier name (Trendyol API adds " Marketplace" or similar suffixes)
+                def normalize_carrier(name: str):
+                    if not name: return ""
+                    name = name.lower()
+                    if "yurtiçi" in name or "yurtici" in name: return "Yurtiçi Kargo"
+                    if "mng" in name: return "MNG Kargo"
+                    if "aras" in name: return "Aras Kargo"
+                    if "sürat" in name or "surat" in name: return "Sürat Kargo"
+                    if "trendyol express" in name or "tex" in name: return "Trendyol Express"
+                    if "ptt" in name: return "PTT Kargo"
+                    if "hepsijet" in name: return "Hepsijet"
+                    if "kargoist" in name: return "Kargoist"
+                    if "kargom" in name: return "Kargom"
+                    return name
+                
+                carrier = normalize_carrier(raw_carrier)
                 
                 # TRENDYOL BAREM DESTEK (26 Mart 2026) KONTROLÜ
                 barem_applied = False

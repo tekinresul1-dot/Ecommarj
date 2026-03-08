@@ -193,14 +193,37 @@ class TrendyolSyncService:
             # micro export flag
             is_micro = o_data.get("micro", False)
             
+            # Cargo details
+            cargo_provider = o_data.get("cargoProviderName", "")
+            cargo_tracking = o_data.get("cargoTrackingNumber", "")
+            cargo_detail = o_data.get("cargoDetail") or {}
+            if cargo_detail:
+                if cargo_detail.get("cargoProviderName"):
+                    cargo_provider = cargo_detail.get("cargoProviderName")
+                if cargo_detail.get("trackingNumber"):
+                    cargo_tracking = cargo_detail.get("trackingNumber")
+            
+            # Country code
+            country_code = "TR"
+            ship_addr = o_data.get("shipmentAddress") or {}
+            if ship_addr.get("countryCode"):
+                country_code = ship_addr["countryCode"]
+            elif is_micro:
+                country_code = ship_addr.get("countryCode", "XX")
+            
             order, _ = Order.objects.update_or_create(
                 organization=self.organization,
                 marketplace_order_id=shipment_package_id,  # UNIQUE per package
+                package_id=shipment_package_id,            # MUST match unique_together constraints
                 defaults={
                     "marketplace_account": self.account,
+                    "order_number": order_number,          # Keep this updated just in case
                     "order_date": order_date,
                     "status": mapped_status,
                     "channel": Order.Channel.MICRO_EXPORT if is_micro else Order.Channel.TRENDYOL,
+                    "country_code": country_code,
+                    "cargo_provider_name": cargo_provider,
+                    "cargo_tracking_number": cargo_tracking,
                 }
             )
 

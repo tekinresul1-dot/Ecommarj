@@ -297,7 +297,7 @@ export default function RegisterPage() {
                 <div className="md:col-span-2 flex flex-col gap-6">
                     <div className="glass-card rounded-2xl border border-white/10 p-6 sm:p-7 shadow-xl shadow-black/10">
                         <h3 className="text-sm font-semibold text-white/90 uppercase tracking-widest mb-5">
-                            Neden EcomPro?
+                            Neden EcomMarj?
                         </h3>
                         <div className="space-y-5">
                             {trustPoints.map((item, i) => (
@@ -327,7 +327,7 @@ export default function RegisterPage() {
 
                     <div className="glass-card rounded-2xl border border-white/10 p-6 shadow-xl shadow-black/10 text-center">
                         <p className="text-2xl font-extrabold gradient-text-blue mb-1">2,500+</p>
-                        <p className="text-xs text-white/50">Aktif satıcı EcomPro kullanıyor</p>
+                        <p className="text-xs text-white/50">Aktif satıcı EcomMarj kullanıyor</p>
                     </div>
                 </div>
             </div>

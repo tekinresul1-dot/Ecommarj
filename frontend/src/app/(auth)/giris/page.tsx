@@ -80,7 +80,7 @@ export default function LoginPage() {
                 {/* Header */}
                 <div className="text-center mb-8">
                     <h1 className="text-3xl md:text-4xl font-semibold text-white tracking-tight">
-                        EcomPro&apos;ya Giriş Yap
+                        EcomMarj&apos;ya Giriş Yap
                     </h1>
                     <p className="mt-3 text-sm md:text-base text-white/60 leading-relaxed">
                         Kârlılık paneline erişin, sipariş ve ürün

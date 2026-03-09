@@ -1,5 +1,5 @@
 """
-Auth views for EcomPro — register, login, me.
+Auth views for EcomMarj — register, login, me.
 """
 
 from django.contrib.auth import authenticate

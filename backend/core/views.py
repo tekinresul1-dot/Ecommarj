@@ -9,6 +9,7 @@ from core.models import (
     Organization, MarketplaceAccount, Product, ProductVariant,
     Order, OrderItem, FinancialTransactionType
 )
+from core.utils.mixins import TenantQuerySetMixin
 from core.services.profit_calculator import ProfitCalculator
 from core.tasks import sync_all_trendyol_data_task
 

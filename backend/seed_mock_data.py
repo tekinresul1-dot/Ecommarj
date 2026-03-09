@@ -5,7 +5,7 @@ from decimal import Decimal
 from datetime import timedelta
 from django.utils import timezone
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'ecompro_backend.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'ecommarj_backend.settings')
 django.setup()
 
 from django.contrib.auth import get_user_model
@@ -18,7 +18,7 @@ from core.services.profit_calculator import ProfitCalculator
 User = get_user_model()
 
 def run():
-    print("Seeding mock data for EcomPro...")
+    print("Seeding mock data for EcomMarj...")
 
     # 1. Ensure user and organization exist
     admin_user = User.objects.filter(is_superuser=True).first()

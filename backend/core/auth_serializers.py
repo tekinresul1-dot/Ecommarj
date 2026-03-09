@@ -1,5 +1,5 @@
 """
-Auth serializers for EcomPro registration and login.
+Auth serializers for EcomMarj registration and login.
 """
 
 from django.contrib.auth.models import User

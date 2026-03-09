@@ -1,5 +1,5 @@
 """
-URL configuration for ecompro_backend project.
+URL configuration for ecommarj_backend project.
 """
 
 from django.contrib import admin

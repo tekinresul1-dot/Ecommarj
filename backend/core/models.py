@@ -1,5 +1,5 @@
 """
-Ecompro Core Models
+EcomMarj Core Models
 ===================
 All domain models for multi-tenant e-commerce profitability tracking.
 """

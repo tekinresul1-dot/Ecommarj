@@ -65,7 +65,7 @@ export default function Hero() {
                             </div>
                             <div className="flex-1 mx-8">
                                 <div className="max-w-[240px] mx-auto bg-navy-950/60 rounded-md px-3 py-1 text-xs text-slate-500 text-center">
-                                    app.ecompro.com/dashboard
+                                    app.ecommarj.com/dashboard
                                 </div>
                             </div>
                         </div>

@@ -1,7 +1,3 @@
-"""
-Django admin definitions for Ecompro core models.
-"""
-
 from django.contrib import admin
 from .models import (
     Organization,
@@ -16,6 +12,9 @@ from .models import (
     ExchangeRate,
     ProfitSnapshot,
     SyncJob,
+    SyncCheckpoint,
+    SyncAuditLog,
+    ReturnClaim,
 )
 
 
@@ -58,9 +57,10 @@ class OrderItemInline(admin.TabularInline):
 
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    list_display = ("marketplace_order_id", "organization", "channel", "order_date", "status")
+    list_display = ("marketplace_order_id", "package_id", "organization", "channel", "order_date", "status", "last_synced_at")
     list_filter = ("status", "channel", "organization")
-    search_fields = ("marketplace_order_id",)
+    search_fields = ("marketplace_order_id", "package_id", "order_number")
+    readonly_fields = ("raw_payload_hash", "previous_status", "status_changed_at")
     inlines = [OrderItemInline]
 
 
@@ -93,3 +93,25 @@ class ProfitSnapshotAdmin(admin.ModelAdmin):
 class SyncJobAdmin(admin.ModelAdmin):
     list_display = ("job_type", "status", "organization", "marketplace_account", "started_at")
     list_filter = ("job_type", "status")
+
+
+@admin.register(SyncCheckpoint)
+class SyncCheckpointAdmin(admin.ModelAdmin):
+    list_display = ("marketplace_account", "sync_type", "last_successful_sync_at", "last_fetched_modified_date")
+    list_filter = ("sync_type",)
+
+
+@admin.register(SyncAuditLog)
+class SyncAuditLogAdmin(admin.ModelAdmin):
+    list_display = ("sync_type", "sync_mode", "started_at", "success", "total_fetched", "inserted", "updated", "skipped", "failed", "duration_seconds")
+    list_filter = ("sync_type", "sync_mode", "success")
+    readonly_fields = ("error_message",)
+    ordering = ("-started_at",)
+
+
+@admin.register(ReturnClaim)
+class ReturnClaimAdmin(admin.ModelAdmin):
+    list_display = ("claim_id", "order_number", "claim_status", "refund_amount", "claim_date")
+    list_filter = ("claim_status",)
+    search_fields = ("claim_id", "order_number")
+

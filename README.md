@@ -65,3 +65,30 @@ npm run dev
 ```
 
 Platform varsayılan olarak `http://localhost:3000` adresinde çalışacaktır. API istekleri `http://localhost:8000` adresine yönlendirilecektir.
+
+---
+
+## 🚀 Üretim (Production) Ortamına Kurulum (Hetzner vb.)
+
+Bu proje tam otomatik Docker üretim ortamına hazırdır. 
+
+**Adım 1:** Sunucuda repository'i indirin ve ayarları yapın:
+```bash
+git clone https://github.com/KULLANICI_ADI/EcomMarj.git
+cd EcomMarj
+cp .env.example backend/.env
+# .env dosyasındaki şifreleri ve alan adınızı kendinize göre güncelleyin!
+nano backend/.env
+```
+
+**Adım 2:** Tek Dokunuşla Canlıya Alın:
+```bash
+./deploy.sh
+```
+
+**Arkaplanda Neler Oluyor?**
+- `deploy.sh` güncel kodları çeker ve Docker imajlarını derler.
+- PostgreSQL ayağa kalkana kadar backend bekler (Healthcheck).
+- `python manage.py collectstatic` ve `migrate` otomatik çalışır.
+- Eğer veritabanı boşsa `.env` dosyasındaki bilgilerle otomatik bir Superuser yaratılır.
+- Son olarak Django sunucusu performansı artırmak için **Gunicorn** ile ayağa kalkar.

@@ -1,6 +1,6 @@
-# EcomPro - Premium SaaS E-Ticaret Karlılık Platformu
+# EcomMarj - Premium SaaS E-Ticaret Karlılık Platformu
 
-EcomPro, e-ticaret satıcıları (özellikle Trendyol) için geliştirilmiş, ürün bazlı karlılık analizi, sipariş takibi ve detaylı finansal raporlama sunan premium bir SaaS platformudur. 
+EcomMarj, e-ticaret satıcıları (özellikle Trendyol) için geliştirilmiş, ürün bazlı karlılık analizi, sipariş takibi ve detaylı finansal raporlama sunan premium bir SaaS platformudur. 
 
 Farklı platformlardaki (başlangıçta Trendyol) mağazalarınızı bağlayarak; komisyon, kargo, KDV ve ek giderlerinizi tek bir ekranda görerek gerçek net kârınızı anlık olarak takip edebilirsiniz.
 

@@ -12,7 +12,7 @@ from core.utils.encryption import decrypt_value
 
 logger = logging.getLogger(__name__)
 
-# Trendyol status -> EcomPro status mapping
+# Trendyol status -> EcomMarj status mapping
 STATUS_MAP = {
     "Created": Order.Status.CREATED,
     "Picking": Order.Status.PICKING,
@@ -27,7 +27,7 @@ STATUS_MAP = {
 class TrendyolSyncService:
     """
     TrendyolAdapter kullanarak API'den çekilen verileri 
-    EcomPro veritabanı tablolarına dönüştürür ve kaydeder.
+    EcomMarj veritabanı tablolarına dönüştürür ve kaydeder.
     """
     def __init__(self, account: MarketplaceAccount):
         self.account = account

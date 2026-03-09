@@ -82,7 +82,7 @@ export default function Features() {
                         Kârınızı Artıran <span className="gradient-text">Her Araç</span>
                     </h2>
                     <p className="mt-4 text-base sm:text-lg text-white/70 max-w-2xl mx-auto leading-relaxed">
-                        Excel tablolarıyla uğraşmayın. Ecompro, tüm hesaplamaları arka planda otomatik yapar ve size net resmi gösterir.
+                        Excel tablolarıyla uğraşmayın. EcomMarj, tüm hesaplamaları arka planda otomatik yapar ve size net resmi gösterir.
                     </p>
                 </div>
 

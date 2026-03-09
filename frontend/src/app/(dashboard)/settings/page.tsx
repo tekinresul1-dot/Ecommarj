@@ -245,7 +245,7 @@ export default function SettingsPage() {
               <div className="space-y-1">
                 <h4 className="font-medium text-orange-200">Veri Güvenliği ve Senkronizasyon</h4>
                 <p className="text-sm text-slate-400 leading-relaxed">
-                  Güvenliğiniz için API Secret şifrelenerek saklanmaktadır. Bilgilerinizi kaydettiğinizde EcomPro arka planda ürünlerinizi, komisyonları ve satış verilerinizi otomatik çekmeye başlar.
+                  Güvenliğiniz için API Secret şifrelenerek saklanmaktadır. Bilgilerinizi kaydettiğinizde EcomMarj arka planda ürünlerinizi, komisyonları ve satış verilerinizi otomatik çekmeye başlar.
                 </p>
               </div>
             </div>

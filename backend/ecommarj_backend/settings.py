@@ -1,5 +1,5 @@
 """
-Django settings for ecompro_backend project.
+Django settings for ecommarj_backend project.
 """
 
 import os
@@ -48,7 +48,7 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = "ecompro_backend.urls"
+ROOT_URLCONF = "ecommarj_backend.urls"
 
 TEMPLATES = [
     {
@@ -66,19 +66,37 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = "ecompro_backend.wsgi.application"
+WSGI_APPLICATION = "ecommarj_backend.wsgi.application"
 
 
 # ---------------------------------------------------------------------------
-# Database – SQLite (geliştirme ortamı)
+# Database
 # ---------------------------------------------------------------------------
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+POSTGRES_DB = os.getenv("POSTGRES_DB")
+POSTGRES_USER = os.getenv("POSTGRES_USER")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres")
+POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
+
+if all([POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD]):
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": POSTGRES_DB,
+            "USER": POSTGRES_USER,
+            "PASSWORD": POSTGRES_PASSWORD,
+            "HOST": POSTGRES_HOST,
+            "PORT": POSTGRES_PORT,
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -165,13 +183,25 @@ SIMPLE_JWT = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Celery (for background sync jobs)
-# ---------------------------------------------------------------------------
-
 CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "Europe/Istanbul"
+
+# ---------------------------------------------------------------------------
+# Production Security Settings
+# ---------------------------------------------------------------------------
+
+if not DEBUG:
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "False").lower() in ("true", "1")
+    X_FRAME_OPTIONS = "DENY"
+    # HSTS settings
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True

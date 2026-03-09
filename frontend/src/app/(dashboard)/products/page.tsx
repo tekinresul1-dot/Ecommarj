@@ -378,7 +378,7 @@ export default function ProductsPage() {
                                                                 <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                                                                     <span>Model Kodu: <span className="text-slate-200">{master.marketplace_sku || "-"}</span></span>
                                                                     <span className="text-slate-600 hidden sm:inline">•</span>
-                                                                    <span>Marka: <span className="text-slate-200">{master.brand || "EcomPro"}</span></span>
+                                                                    <span>Marka: <span className="text-slate-200">{master.brand || "EcomMarj"}</span></span>
                                                                 </div>
                                                             </div>
                                                         </div>

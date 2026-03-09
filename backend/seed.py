@@ -1,6 +1,6 @@
 import os
 import django
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "ecompro_backend.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "ecommarj_backend.settings")
 django.setup()
 
 from django.contrib.auth import get_user_model
@@ -10,9 +10,9 @@ from django.utils import timezone
 from datetime import timedelta
 
 User = get_user_model()
-if not User.objects.filter(email='demo@ecompro.com').exists():
-    user = User.objects.create_user(username='demo@ecompro.com', email='demo@ecompro.com', password='password123', first_name='Ozan', last_name='Candemir')
-    org = Organization.objects.create(name="EcomPro Test A.Ş.")
+if not User.objects.filter(email='demo@ecommarj.com').exists():
+    user = User.objects.create_user(username='demo@ecommarj.com', email='demo@ecommarj.com', password='password123', first_name='Ozan', last_name='Candemir')
+    org = Organization.objects.create(name="EcomMarj Test A.Ş.")
     UserProfile.objects.create(user=user, organization=org)
 
     acc = MarketplaceAccount.objects.create(organization=org, store_name="Trendyol TR", seller_id="444")

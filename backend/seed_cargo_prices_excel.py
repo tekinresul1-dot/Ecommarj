@@ -3,7 +3,7 @@ import django
 from decimal import Decimal
 import pandas as pd
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'ecompro_backend.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'ecommarj_backend.settings')
 django.setup()
 
 from core.models import CargoPricing

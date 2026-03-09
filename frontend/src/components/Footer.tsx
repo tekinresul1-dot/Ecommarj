@@ -69,7 +69,7 @@ export default function Footer() {
 
                 {/* Bottom bar */}
                 <div className="mt-14 pt-8 border-t border-white/5 flex flex-col sm:flex-row items-center justify-between gap-4">
-                    <p className="text-xs text-slate-600">© 2026 EcomPro. Tüm hakları saklıdır.</p>
+                    <p className="text-xs text-slate-600">© 2026 EcomMarj. Tüm hakları saklıdır.</p>
                     <p className="text-xs text-slate-600">Türkiye&apos;de 🇹🇷 sevgiyle yapıldı.</p>
                 </div>
             </div>

@@ -27,7 +27,7 @@ from core.utils.encryption import decrypt_value
 
 logger = logging.getLogger(__name__)
 
-# Trendyol status -> EcomPro status mapping
+# Trendyol status -> EcomMarj status mapping
 STATUS_MAP = {
     "Created": Order.Status.CREATED,
     "Picking": Order.Status.PICKING,

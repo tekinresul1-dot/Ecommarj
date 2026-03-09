@@ -9,9 +9,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "EcomPro – Trendyol Satıcıları İçin Karlılık ve Büyüme Platformu",
-  description:
-    "Trendyol mağazanızın gerçek karlılığını saniyeler içinde görün. Komisyon, kargo, iade ve tüm giderlerinizi otomatik hesaplayarak büyümenizi hızlandırın.",
+  title: "EcomMarj – Trendyol Satıcıları İçin Karlılık ve Büyüme Platformu",
+  description: "Trendyol mağazanızın gerçek kârlılığını tek ekranda görün. Komisyon, kargo, iade ve gizli maliyetleri otomatik hesaplayın. EcomMarj ile zarar eden ürünlerinizi tespit edip büyümeye odaklanın.",
   keywords: "trendyol, karlılık, e-ticaret, satıcı, analiz, sipariş, komisyon",
 };
 

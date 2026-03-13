@@ -1,10 +1,11 @@
 import cloudscraper
 import requests
 
-# Set credentials
-seller_id = "856063"
-api_key = "K89KKCv4COp7ZfMep0NV"
-api_secret = "llDqplGqQPUBbFDXD5ul"
+# Set credentials (load from environment variables)
+import os
+seller_id = os.environ.get("TRENDYOL_SELLER_ID", "")
+api_key = os.environ.get("TRENDYOL_API_KEY", "")
+api_secret = os.environ.get("TRENDYOL_API_SECRET", "")
 
 url = f"https://api.trendyol.com/sapigw/suppliers/{seller_id}/products?size=1"
 headers = {

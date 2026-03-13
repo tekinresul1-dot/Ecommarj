@@ -504,13 +504,11 @@ class TrendyolSaveCredentialsView(APIView):
         if not account:
             return Response({
                 "api_key": "",
-                "api_secret": "",
                 "supplier_id": ""
             })
 
         return Response({
             "api_key": account.api_key,
-            "api_secret": decrypt_value(account.api_secret), 
             "supplier_id": account.seller_id
         })
 

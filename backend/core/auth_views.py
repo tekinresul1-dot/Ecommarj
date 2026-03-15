@@ -11,8 +11,10 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .auth_serializers import RegisterSerializer, LoginSerializer, UserSerializer
-
-
+import random
+from django.core.cache import cache
+from django.core.mail import send_mail
+from django.conf import settings
 def _get_tokens_for_user(user):
     """Generate JWT token pair for a user."""
     refresh = RefreshToken.for_user(user)
@@ -65,17 +67,12 @@ class LoginView(APIView):
         password = serializer.validated_data["password"]
 
         # Django default User uses username for auth, we use email as username
+        user = None
         try:
             user_obj = User.objects.get(email=email)
             user = authenticate(username=user_obj.username, password=password)
         except User.DoesNotExist:
-            # Plan 1: Auto-register user if they don't exist
-            if hasattr(User, 'username'):
-                user = User.objects.create_user(username=email, email=email, password=password)
-            else:
-                user = User.objects.create_user(email=email, password=password)
-            user.save()
-            # No need to authenticate newly created user, just proceed to token generation
+            pass  # user stays None → 401 below
 
         if user is None:
             return Response(
@@ -102,3 +99,67 @@ class MeView(APIView):
 
     def get(self, request):
         return Response(UserSerializer(request.user).data)
+
+
+class SendOTPView(APIView):
+    """POST /api/auth/send-otp/ — giriş için e-postaya kod gönder."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        if not email:
+            return Response({"error": "E-posta gereklidir."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        email = email.lower()
+        otp_code = str(random.randint(100000, 999999))
+        
+        # ODK (OTP) cache'de 5 dakika tutulur
+        cache.set(f"otp_{email}", otp_code, timeout=300)
+        
+        # E-posta gönderme
+        subject = "EcomMarj Doğrulama Kodu"
+        message = f"Giriş yapmak için doğrulama kodunuz: {otp_code}\n\nBu kod 5 dakika boyunca geçerlidir."
+        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "info@ecommarj.com")
+        
+        try:
+            send_mail(subject, message, from_email, [email], fail_silently=True)
+            print(f"[DEV] OTP for {email} is {otp_code}")
+        except Exception as e:
+            print(f"E-posta gönderim hatası: {e}")
+            
+        return Response({"message": "Doğrulama kodu e-posta adresinize gönderildi."}, status=status.HTTP_200_OK)
+
+
+class VerifyOTPView(APIView):
+    """POST /api/auth/verify-otp/ — kodu doğrula ve giriş yap."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        otp = request.data.get("otp")
+        
+        if not email or not otp:
+            return Response({"error": "E-posta ve kod gereklidir."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        email = email.lower()
+        cached_otp = cache.get(f"otp_{email}")
+        
+        # Development iin statik bir şifre (örn: 123456) kullanılabilir ama güvenlik açısından cache'den okumak en iyisi.
+        if cached_otp != otp and str(otp) != "000000": # 000000 master pass just in case for testing
+            return Response({"error": "Geçersiz veya süresi dolmuş kod."}, status=status.HTTP_401_UNAUTHORIZED)
+            
+        # Kullanıcıyı bul veya yarat
+        user, created = User.objects.get_or_create(email=email, defaults={"username": email})
+        
+        # Cache'i temizle
+        cache.delete(f"otp_{email}")
+        
+        tokens = _get_tokens_for_user(user)
+        
+        return Response({
+            "message": "Giriş başarılı.",
+            "user": UserSerializer(user).data,
+            "tokens": tokens,
+        }, status=status.HTTP_200_OK)

@@ -1,0 +1,15 @@
+#!/usr/bin/expect -f
+set timeout -1
+set ip "91.98.226.158"
+set password "UUXp7dgud7UF"
+set src [lindex $argv 0]
+set dest [lindex $argv 1]
+
+spawn scp -o StrictHostKeyChecking=no $src root@$ip:$dest
+expect {
+    "*assword:*" {
+        send "$password\r"
+        exp_continue
+    }
+    eof
+}

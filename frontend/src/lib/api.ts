@@ -1,11 +1,11 @@
 const getApiBase = () => {
-    // Traverse proxy bug: Next.js strips trailing slashes on POST requests which breaks Django's APPEND_SLASH.
-    // Connect directly to the port 8000 API relative to the current window hostname to continue supporting LAN usage.
     if (typeof window !== "undefined") {
-        return `${window.location.protocol}//${window.location.hostname}:8000/api`;
+        // In production, Nginx proxies /api to port 8000. 
+        // Using relative path ensures it works on whatever port/domain the user is on.
+        return "/api";
     }
     let base = process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
-    return base.replace(/\/$/, ""); // Remove trailing slash if any
+    return base.replace(/\/$/, "");
 };
 
 const API_BASE = getApiBase();

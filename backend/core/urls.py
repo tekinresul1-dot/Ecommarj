@@ -1,5 +1,5 @@
 from django.urls import path
-from .auth_views import RegisterView, LoginView, MeView
+from .auth_views import RegisterView, LoginView, MeView, SendOTPView, VerifyOTPView
 from .views import (
     DashboardOverviewView, MockReportsView, TriggerSyncView,
     ProductListView, OrderListView, ProductAnalysisView,
@@ -17,6 +17,8 @@ urlpatterns = [
     # Auth
     path("auth/register/", RegisterView.as_view(), name="auth-register"),
     path("auth/login/", LoginView.as_view(), name="auth-login"),
+    path("auth/send-otp/", SendOTPView.as_view(), name="auth-send-otp"),
+    path("auth/verify-otp/", VerifyOTPView.as_view(), name="auth-verify-otp"),
     path("auth/me/", MeView.as_view(), name="auth-me"),
 
     # Dashboard & Reports

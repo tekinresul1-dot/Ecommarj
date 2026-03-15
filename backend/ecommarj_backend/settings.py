@@ -23,6 +23,7 @@ ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split("
 # ---------------------------------------------------------------------------
 
 INSTALLED_APPS = [
+    "jazzmin",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -36,6 +37,72 @@ INSTALLED_APPS = [
     # Local apps
     "core",
 ]
+
+JAZZMIN_SETTINGS = {
+    "site_title": "EcomMarj Admin",
+    "site_header": "EcomMarj",
+    "site_brand": "EcomMarj",
+    "welcome_sign": "EcomMarj Paneline Hoş Geldiniz",
+    "copyright": "EcomMarj Ltd",
+    "search_model": ["auth.User", "core.Order"],
+    "user_avatar": None,
+    "topmenu_links": [
+        {"name": "Ana Sayfa", "url": "admin:index", "permissions": ["auth.view_user"]},
+        {"name": "Siteyi Görüntüle", "url": "https://ecommarj.com", "new_window": True},
+    ],
+    "show_sidebar": True,
+    "navigation_expanded": True,
+    "icons": {
+        "auth": "fas fa-users-cog",
+        "auth.user": "fas fa-user",
+        "auth.Group": "fas fa-users",
+        "core.Organization": "fas fa-building",
+        "core.UserProfile": "fas fa-id-card",
+        "core.MarketplaceAccount": "fas fa-store",
+        "core.Product": "fas fa-box",
+        "core.ProductVariant": "fas fa-boxes",
+        "core.Order": "fas fa-shopping-cart",
+        "core.OrderItem": "fas fa-list",
+        "core.FinancialTransaction": "fas fa-money-bill-wave",
+        "core.ProfitSnapshot": "fas fa-chart-line",
+        "core.SyncAuditLog": "fas fa-clipboard-list",
+    },
+    "order_with_respect_to": ["core", "auth"],
+    "use_google_fonts_cdn": True,
+    "show_ui_builder": False,
+}
+
+JAZZMIN_UI_TWEAKS = {
+    "navbar_small_text": False,
+    "footer_small_text": False,
+    "body_small_text": False,
+    "brand_small_text": False,
+    "brand_colour": "navbar-info",
+    "accent": "accent-primary",
+    "navbar": "navbar-dark",
+    "no_navbar_border": False,
+    "navbar_fixed": False,
+    "layout_fixed": False,
+    "footer_fixed": False,
+    "sidebar_fixed": True,
+    "sidebar": "sidebar-dark-primary",
+    "sidebar_nav_small_text": False,
+    "sidebar_disable_expand": False,
+    "sidebar_nav_child_indent": False,
+    "sidebar_nav_compact_style": False,
+    "sidebar_nav_legacy_style": False,
+    "sidebar_nav_flat_style": False,
+    "theme": "default",
+    "dark_mode_theme": None,
+    "button_classes": {
+        "primary": "btn-primary",
+        "secondary": "btn-secondary",
+        "info": "btn-info",
+        "warning": "btn-warning",
+        "danger": "btn-danger",
+        "success": "btn-success"
+    }
+}
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",

@@ -3,11 +3,12 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   skipTrailingSlashRedirect: true,
   async rewrites() {
+    const backend = (process.env.NEXT_PUBLIC_API_URL || "http://backend:8000/api").replace(/\/$/, "");
     return [
-      {
-        source: "/api/:path*",
-        destination: `${process.env.NEXT_PUBLIC_API_URL || "http://backend:8000/api"}/:path*`,
-      },
+      // Match paths with trailing slash first — preserve it
+      { source: "/api/:path*/", destination: `${backend}/:path*/` },
+      // Match paths without trailing slash — forward as-is
+      { source: "/api/:path*", destination: `${backend}/:path*` },
     ];
   },
   images: {

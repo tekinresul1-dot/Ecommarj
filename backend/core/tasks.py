@@ -119,6 +119,49 @@ def trendyol_cargo_sync(self, account_id: int):
         raise self.retry(exc=e)
 
 
+# ---------------------------------------------------------------------------
+# Celery Beat — Tüm aktif hesapları tarayıp per-account görevleri ateşler
+# ---------------------------------------------------------------------------
+
+@shared_task
+def trendyol_incremental_sync_all_accounts():
+    """Tüm aktif Trendyol hesapları için artımlı sipariş senkronizasyonu başlatır."""
+    from core.models import MarketplaceAccount
+    accounts = MarketplaceAccount.objects.filter(is_active=True, channel="trendyol")
+    dispatched = 0
+    for account in accounts:
+        trendyol_incremental_sync.delay(account.id)
+        dispatched += 1
+    logger.info(f"[Beat] Incremental sync dispatched for {dispatched} accounts")
+    return f"Dispatched {dispatched} incremental syncs"
+
+
+@shared_task
+def trendyol_claims_sync_all_accounts():
+    """Tüm aktif Trendyol hesapları için iade/talep senkronizasyonu başlatır."""
+    from core.models import MarketplaceAccount
+    accounts = MarketplaceAccount.objects.filter(is_active=True, channel="trendyol")
+    dispatched = 0
+    for account in accounts:
+        trendyol_claims_sync.delay(account.id)
+        dispatched += 1
+    logger.info(f"[Beat] Claims sync dispatched for {dispatched} accounts")
+    return f"Dispatched {dispatched} claims syncs"
+
+
+@shared_task
+def trendyol_reconciliation_all_accounts():
+    """Tüm aktif Trendyol hesapları için uzlaştırma başlatır."""
+    from core.models import MarketplaceAccount
+    accounts = MarketplaceAccount.objects.filter(is_active=True, channel="trendyol")
+    dispatched = 0
+    for account in accounts:
+        trendyol_reconciliation.delay(account.id)
+        dispatched += 1
+    logger.info(f"[Beat] Reconciliation dispatched for {dispatched} accounts")
+    return f"Dispatched {dispatched} reconciliation tasks"
+
+
 # Legacy task - still used by existing sync trigger views
 @shared_task
 def sync_all_trendyol_data_task(account_id: str):

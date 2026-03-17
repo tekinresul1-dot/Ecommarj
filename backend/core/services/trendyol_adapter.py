@@ -115,7 +115,13 @@ class TrendyolAdapter:
                 
         url = f"{self.BASE_URL}/order/sellers/{self.seller_id}/orders"
 
-        params = {"size": 200}
+        params = {
+            "size": 200,
+            # PackageLastModifiedDate ile filtrele — son değişiklik tarihine göre arar
+            # Bu sayede eski siparişlerin durum güncellemeleri (kargo, teslimat vb.) atlanmaz
+            "orderByField": "PackageLastModifiedDate",
+            "orderByDirection": "ASC",
+        }
         if start_date_ms:
             params["startDate"] = start_date_ms
         if end_date_ms:
@@ -160,7 +166,7 @@ class TrendyolAdapter:
         params = {
             "size": 100,
             "archived": False,   # Arşivlenmiş ürünleri getirme
-            "approved": True,    # Sadece onaylanmış (satıştaki) ürünler
+            # approved filtresi kaldırıldı — onay bekleyen ve reddedilen ürünler de çekilsin
         }
 
         all_content = []

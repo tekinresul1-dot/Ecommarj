@@ -1400,35 +1400,45 @@ class ProductExcelImportView(APIView):
                     continue
                     
                 barcode = str(row[idx_barkod]).strip()
-                try:
-                    variant = ProductVariant.objects.select_related('product').get(barcode=barcode, product__organization=org)
-                except ProductVariant.DoesNotExist:
-                    continue # Skip variants not found or belonging to others
+                variant = ProductVariant.objects.select_related('product').filter(
+                    barcode=barcode, product__organization=org
+                ).first()
+                if variant is None:
+                    continue  # Barkoda uyan varyant bulunamadı, satırı atla
                     
                 try:
                     # Update cost fields
                     cost_val = row[idx_cost]
                     vat_val = row[idx_vat]
-                    
+
+                    variant_fields_to_save = []
+                    product_fields_to_save = []
+
                     if cost_val is not None:
                         variant.cost_price = Decimal(str(cost_val).replace(',', '.'))
+                        variant_fields_to_save.append("cost_price")
                     if vat_val is not None:
                         variant.cost_vat_rate = Decimal(str(vat_val).replace(',', '.'))
-                        
+                        variant_fields_to_save.append("cost_vat_rate")
+
                     # Update Desi
                     if idx_desi is not None and row[idx_desi] is not None:
-                         desi_val = Decimal(str(row[idx_desi]).replace(',', '.'))
-                         variant.desi = desi_val
-                         # Optional: also update parent product desi if you'd like it globally synced
-                         variant.product.desi = desi_val
-                         
+                        desi_val = Decimal(str(row[idx_desi]).replace(',', '.'))
+                        variant.desi = desi_val
+                        variant_fields_to_save.append("desi")
+                        variant.product.desi = desi_val
+                        product_fields_to_save.append("desi")
+
                     # Update fast delivery flag on parent
                     if idx_fast is not None and row[idx_fast] is not None:
-                         fast_str = str(row[idx_fast]).strip().lower()
-                         variant.product.fast_delivery = (fast_str == "evet")
-                         
-                    variant.product.save()
-                    variant.save()
+                        fast_str = str(row[idx_fast]).strip().lower()
+                        variant.product.fast_delivery = (fast_str == "evet")
+                        product_fields_to_save.append("fast_delivery")
+
+                    if product_fields_to_save:
+                        variant.product.save(update_fields=product_fields_to_save)
+                    if variant_fields_to_save:
+                        variant.save(update_fields=variant_fields_to_save)
                     updated_variants += 1
 
                 except Exception as e:

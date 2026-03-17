@@ -1,13 +1,6 @@
-from django.urls import path
-from .auth_views import RegisterView, LoginView, MeView, SendOTPView, VerifyOTPView
-from rest_framework_simplejwt.views import TokenRefreshView
-from .views import (
-    DashboardOverviewView, MockReportsView, TriggerSyncView,
-    ProductListView, OrderListView, ProductAnalysisView,
-    TrendyolTestConnectionView, TrendyolSaveCredentialsView,
-    CategoryAnalysisView, ReturnAnalysisView, AdsAnalysisView,
-    ProductExcelExportView, ProductExcelImportView,
-)
+urls_content = """from django.urls import path, include
+from .auth_views import SendOTPView, VerifyOTPView, RegisterView, LoginView, MeView
+from .views import DashboardOverviewView, TriggerSyncView, MockReportsView, ProductListView, OrderListView, ProductAnalysisView, CategoryAnalysisView, ReturnAnalysisView, AdsAnalysisView, ProductExcelExportView, ProductExcelImportView, TrendyolTestConnectionView, TrendyolSaveCredentialsView
 from .sync_views import (
     TrendyolFullSyncView, TrendyolIncrementalSyncView,
     TrendyolBackfillSyncView, TrendyolClaimsSyncView,
@@ -21,7 +14,6 @@ urlpatterns = [
     path("auth/send-otp/", SendOTPView.as_view(), name="auth-send-otp"),
     path("auth/verify-otp/", VerifyOTPView.as_view(), name="auth-verify-otp"),
     path("auth/me/", MeView.as_view(), name="auth-me"),
-    path("auth/token/refresh/", TokenRefreshView.as_view(), name="auth-token-refresh"),
 
     # Dashboard & Reports
     path("dashboard/overview/", DashboardOverviewView.as_view(), name="dashboard-overview"),
@@ -52,4 +44,8 @@ urlpatterns = [
     path("reports/ads/", AdsAnalysisView.as_view(), name="ads-analysis"),
     path("reports/<str:report_type>/", MockReportsView.as_view(), name="reports-mock"),
 ]
+"""
 
+with open('/var/www/ecommarj/backend/core/urls.py', 'w') as f:
+    f.write(urls_content)
+print("Updated core/urls.py")

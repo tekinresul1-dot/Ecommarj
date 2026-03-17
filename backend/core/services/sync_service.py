@@ -61,19 +61,12 @@ class TrendyolSyncService:
             if not barcode:
                 continue
 
-            # Gereksiz ürünleri filtrele (Kilitli, Kara Listede, Reddedilmiş, veya Manuel Satışa Kapatılmış)
+            # Sadece kilitli veya kara listedeki ürünleri filtrele; reddedilen ve satışa kapalı ürünler de çekilsin
             is_locked = p_data.get("locked", False)
             is_blacklisted = p_data.get("blacklisted", False)
-            is_rejected = p_data.get("rejected", False)
-            is_on_sale = p_data.get("onSale", False)
             stock_quantity = int(p_data.get("quantity", 0))
 
-            if is_locked or is_blacklisted or is_rejected:
-                continue
-            
-            # Stok varken 'onSale' False ise manuel satışa kapatılmış demektir ("Satışa Kapalı" sekmesindeki ürünler)
-            # Stok 0 iken 'onSale' False ise sadece tükenmiştir, bunlar eklenebilir ("Tükenen" ürünler).
-            if not is_on_sale and stock_quantity > 0:
+            if is_locked or is_blacklisted:
                 continue
                 
             vat_rate = Decimal(str(p_data.get("vatRate", "0")))

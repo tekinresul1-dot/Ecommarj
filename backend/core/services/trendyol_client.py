@@ -287,7 +287,7 @@ class TrendyolApiClient:
         params = {
             "size": PRODUCT_PAGE_SIZE,
             "archived": False,
-            "approved": True,
+            # approved filtresi kaldırıldı — onay bekleyen ve reddedilen ürünler de çekilsin
         }
         products = self._fetch_all_pages(url, params, operation="Products")
         logger.info(f"[Trendyol Products] Total fetched: {len(products)} products")

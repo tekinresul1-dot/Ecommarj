@@ -110,8 +110,15 @@ class SendOTPView(APIView):
         email = request.data.get("email")
         if not email:
             return Response({"error": "E-posta gereklidir."}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         email = email.lower()
+
+        if not User.objects.filter(email=email).exists():
+            return Response(
+                {"error": "Bu e-posta adresi sistemde kayıtlı değil."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
         otp_code = str(random.randint(100000, 999999))
         
         # ODK (OTP) cache'de 5 dakika tutulur
@@ -123,11 +130,15 @@ class SendOTPView(APIView):
         from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "info@ecommarj.com")
         
         try:
-            send_mail(subject, message, from_email, [email], fail_silently=True)
-            print(f"[DEV] OTP for {email} is {otp_code}")
+            send_mail(subject, message, from_email, [email], fail_silently=False)
         except Exception as e:
-            print(f"E-posta gönderim hatası: {e}")
-            
+            import logging
+            logging.getLogger(__name__).error(f"OTP e-posta gönderilemedi ({email}): {e}")
+            return Response(
+                {"error": "E-posta gönderilemedi. Lütfen daha sonra tekrar deneyin."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         return Response({"message": "Doğrulama kodu e-posta adresinize gönderildi."}, status=status.HTTP_200_OK)
 
 

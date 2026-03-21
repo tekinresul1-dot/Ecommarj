@@ -19,6 +19,12 @@ except Exception:
 done
 echo "✅ PostgreSQL hazır!"
 
+# If a custom command was passed (e.g. celery worker), skip web-server setup and run it directly.
+# This allows celery_worker and celery_beat to share the same image without a separate Dockerfile.
+if [ "$#" -gt 0 ]; then
+    exec "$@"
+fi
+
 echo "📦 Statik dosyalar toplanıyor (collectstatic)..."
 python manage.py collectstatic --noinput
 

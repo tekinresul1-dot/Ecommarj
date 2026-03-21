@@ -1,0 +1,24 @@
+
+> frontend@0.1.0 dev
+> next dev --webpack -p 3000
+
+▲ Next.js 16.1.6 (webpack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.166:3000
+
+✓ Starting...
+✓ Ready in 2.8s
+⚠ Found a change in next.config.ts. Restarting the server to apply the changes...
+▲ Next.js 16.1.6 (webpack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.166:3000
+
+✓ Starting...
+✓ Ready in 1583ms
+⚠ Found a change in next.config.ts. Restarting the server to apply the changes...
+▲ Next.js 16.1.6 (webpack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.166:3000
+
+✓ Starting...
+✓ Ready in 1765ms

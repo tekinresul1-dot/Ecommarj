@@ -32,22 +32,143 @@ class RegisterView(APIView):
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
         if not serializer.is_valid():
+            # Check for structured error in the email field
+            email_errors = serializer.errors.get("email")
+            if email_errors and isinstance(email_errors, list) and isinstance(email_errors[0], dict):
+                error_info = email_errors[0]
+                return Response(
+                    {
+                        "error_code": error_info.get("code", "VALIDATION_ERROR"),
+                        "message": error_info.get("message", "Giriş yapılamadı."),
+                        "next_action": error_info.get("next_action"),
+                        "errors": serializer.errors
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             return Response(
-                {"errors": serializer.errors},
+                {"error_code": "VALIDATION_ERROR", "errors": serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
         user = serializer.save()
-        tokens = _get_tokens_for_user(user)
+        
+        # Generate OTP for registration verification
+        email = user.email.lower()
+        otp_code = str(random.randint(100000, 999999))
+        
+        # Store OTP in cache for 10 minutes
+        cache.set(f"otp_reg_{email}", otp_code, timeout=600)
+        
+        # Send OTP email
+        subject = "EcomMarj Hesap Doğrulama Kodu"
+        message = f"EcomMarj hesabınızı doğrulamak için kodunuz: {otp_code}\n\nBu kod 10 dakika boyunca geçerlidir."
+        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "info@ecommarj.com")
+        
+        try:
+            send_mail(subject, message, from_email, [email], fail_silently=False)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Registration OTP email failed ({email}): {e}")
+            # We still return success as the user is created, but warn about email failure?
+            # Or perhaps delete user and return error? 
+            # Given requirements, let's just log and continue, user can 'resend'.
 
         return Response(
             {
-                "message": "Hesap başarıyla oluşturuldu.",
-                "user": UserSerializer(user).data,
-                "tokens": tokens,
+                "message": "Hesap oluşturuldu. Lütfen e-posta adresinize gönderilen doğrulama kodunu girin.",
+                "email": email,
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class RegisterVerifyView(APIView):
+    """POST /api/auth/register/verify/ — yeni kaydı doğrula ve login ol."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        otp = request.data.get("otp")
+
+        if not email or not otp:
+            return Response({"error": "E-posta ve kod gereklidir."}, status=status.HTTP_400_BAD_REQUEST)
+
+        email = email.lower()
+        cached_otp = cache.get(f"otp_reg_{email}")
+
+        # Brute-force protection: Check retry count
+        retry_key = f"otp_retry_{email}"
+        retries = cache.get(retry_key, 0)
+        if retries >= 5:
+            cache.delete(f"otp_reg_{email}")  # Invalidate OTP on too many attempts
+            return Response({"error": "Çok fazla hatalı deneme. Yeni bir kod istemeniz gerekiyor."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        # Master OTP Safe Guard: Allowed only in DEBUG mode
+        is_master_otp = str(otp) == "000000"
+        if is_master_otp:
+            if settings.DEBUG:
+                import logging
+                logging.getLogger(__name__).info(f"Master OTP used for {email} in DEBUG mode.")
+            else:
+                # In production, 000000 should NEVER work
+                is_master_otp = False
+
+        if cached_otp != str(otp) and not is_master_otp:
+            cache.set(retry_key, retries + 1, timeout=600)
+            return Response({"error": "Geçersiz veya süresi dolmuş kod."}, status=status.HTTP_401_UNAUTHORIZED)
+
+        try:
+            user = User.objects.get(email=email)
+            user.is_active = True
+            user.save()
+        except User.DoesNotExist:
+            return Response({"error": "Kullanıcı bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Cache'i temizle
+        cache.delete(f"otp_reg_{email}")
+
+        tokens = _get_tokens_for_user(user)
+
+        return Response({
+            "message": "Hesap doğrulandı ve giriş yapıldı.",
+            "user": UserSerializer(user).data,
+            "tokens": tokens,
+        }, status=status.HTTP_200_OK)
+
+
+class RegisterResendOTPView(APIView):
+    """POST /api/auth/register/resend-otp/ — doğrulama kodunu tekrar gönder."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        email = request.data.get("email")
+        if not email:
+            return Response({"error": "E-posta gereklidir."}, status=status.HTTP_400_BAD_REQUEST)
+
+        email = email.lower()
+        
+        # Check cooldown (60 seconds)
+        if cache.get(f"otp_resend_cooldown_{email}"):
+            return Response({"error": "Lütfen yeni bir kod istemeden önce 60 saniye bekleyin."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        if not User.objects.filter(email=email, is_active=False).exists():
+            return Response({"error": "Doğrulama bekleyen kullanıcı bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
+
+        otp_code = str(random.randint(100000, 999999))
+        cache.set(f"otp_reg_{email}", otp_code, timeout=600)
+        cache.set(f"otp_resend_cooldown_{email}", True, timeout=60)
+
+        subject = "EcomMarj Hesap Doğrulama Kodu (Tekrar)"
+        message = f"Hesabınızı doğrulamak için yeni kodunuz: {otp_code}\n\nBu kod 10 dakika boyunca geçerlidir."
+        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "info@ecommarj.com")
+
+        try:
+            send_mail(subject, message, from_email, [email], fail_silently=False)
+        except Exception as e:
+            return Response({"error": "E-posta gönderilemedi."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        return Response({"message": "Doğrulama kodu tekrar gönderildi."}, status=status.HTTP_200_OK)
 
 
 class LoginView(APIView):
@@ -113,7 +234,7 @@ class SendOTPView(APIView):
 
         email = email.lower()
 
-        if not User.objects.filter(email=email).exists():
+        if not User.objects.filter(email=email, is_active=True).exists():
             return Response(
                 {"error": "Bu e-posta adresi sistemde kayıtlı değil."},
                 status=status.HTTP_404_NOT_FOUND,
@@ -139,6 +260,9 @@ class SendOTPView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
+        # Reset retry count if resending code
+        cache.delete(f"otp_retry_{email}")
+
         return Response({"message": "Doğrulama kodu e-posta adresinize gönderildi."}, status=status.HTTP_200_OK)
 
 
@@ -156,13 +280,32 @@ class VerifyOTPView(APIView):
             
         email = email.lower()
         cached_otp = cache.get(f"otp_{email}")
-        
-        # Development iin statik bir şifre (örn: 123456) kullanılabilir ama güvenlik açısından cache'den okumak en iyisi.
-        if cached_otp != otp and str(otp) != "000000": # 000000 master pass just in case for testing
+
+        # Brute-force protection: Check retry count
+        retry_key = f"otp_login_retry_{email}"
+        retries = cache.get(retry_key, 0)
+        if retries >= 5:
+            cache.delete(f"otp_{email}")
+            return Response({"error": "Çok fazla hatalı deneme. Yeni bir kod istemeniz gerekiyor."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        # Master OTP Safe Guard
+        is_master_otp = str(otp) == "000000"
+        if is_master_otp:
+            if settings.DEBUG:
+                import logging
+                logging.getLogger(__name__).info(f"Master login OTP used for {email} in DEBUG mode.")
+            else:
+                is_master_otp = False
+
+        if cached_otp != otp and not is_master_otp:
+            cache.set(retry_key, retries + 1, timeout=300)
             return Response({"error": "Geçersiz veya süresi dolmuş kod."}, status=status.HTTP_401_UNAUTHORIZED)
             
-        # Kullanıcıyı bul veya yarat
-        user, created = User.objects.get_or_create(email=email, defaults={"username": email})
+        # Kullanıcıyı bul — yeni kullanıcı yaratma (güvenlik: sadece kayıtlı+aktif kullanıcılar)
+        try:
+            user = User.objects.get(email=email, is_active=True)
+        except User.DoesNotExist:
+            return Response({"error": "Kullanıcı bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
         
         # Cache'i temizle
         cache.delete(f"otp_{email}")
@@ -174,3 +317,21 @@ class VerifyOTPView(APIView):
             "user": UserSerializer(user).data,
             "tokens": tokens,
         }, status=status.HTTP_200_OK)
+
+
+class UpdateOnboardingStatusView(APIView):
+    """PATCH /api/auth/onboarding/status/ — kullanıcının onboarding durumunu güncelle."""
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        status_val = request.data.get("status")
+        from core.models import UserProfile
+        
+        if status_val not in UserProfile.OnboardingStatus.values:
+            return Response({"error": "Geçersiz durum."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        profile = request.user.profile
+        profile.onboarding_status = status_val
+        profile.save()
+        
+        return Response({"message": "Durum güncellendi.", "onboarding_status": profile.onboarding_status})

@@ -5,7 +5,7 @@ from django.utils import timezone
 from django.db.models import Q
 from core.models import (
     Organization, MarketplaceAccount, Product, Order, OrderItem,
-    FinancialTransaction, FinancialTransactionType, ProductVariant
+    FinancialTransaction, FinancialTransactionType, ProductVariant, CargoInvoice
 )
 from core.services.trendyol_adapter import TrendyolAdapter
 from core.utils.encryption import decrypt_value
@@ -43,9 +43,10 @@ class TrendyolSyncService:
         logger.info(f"Syncing all for account {self.account}")
         self.sync_products()
         self.sync_orders()
-        self.sync_settlements()
-        self.sync_cargo_invoices()
-        
+        self.sync_seller_invoices_settlement()  # Gerçek kargo/komisyon tutarları
+        self.sync_settlements()       # Fallback: eski settlement API
+        self.sync_cargo_invoices()    # Fallback: cargo invoice API
+
         self.account.last_sync_at = timezone.now()
         self.account.save()
         logger.info("Sync completed.")
@@ -74,13 +75,28 @@ class TrendyolSyncService:
             brand = p_data.get("brand", "")
             category_name = p_data.get("categoryName", "")
             product_main_id = p_data.get("productMainId", "")
-            
+            trendyol_content_id = str(p_data.get("productContentId", "") or "")
+            currency = str(p_data.get("currencyType", "") or "TRY").upper() or "TRY"
+
             # Images
             image_url = ""
             images = p_data.get("images")
             if images and len(images) > 0:
                 image_url = images[0].get("url", "")
-            
+
+            # Attributes: extract color and size
+            attributes = p_data.get("attributes", []) or []
+            color = ""
+            size = ""
+            size_attr_names = {"beden", "numara", "ebat", "boy"}
+            for attr in attributes:
+                attr_name = (attr.get("attributeName") or "").lower()
+                attr_value = (attr.get("attributeValue") or "").strip()
+                if attr_name == "renk" and not color:
+                    color = attr_value
+                elif attr_name in size_attr_names and not size:
+                    size = attr_value
+
             product, created = Product.objects.update_or_create(
                 organization=self.organization,
                 marketplace_account=self.account,
@@ -94,6 +110,8 @@ class TrendyolSyncService:
                     "marketplace_sku": product_main_id,
                     "current_stock": stock_quantity,
                     "brand": brand,
+                    "trendyol_content_id": trendyol_content_id,
+                    "currency": currency,
                 }
             )
             
@@ -110,7 +128,7 @@ class TrendyolSyncService:
                     pass
             
             stock_code = p_data.get("stockCode") or p_data.get("productCode") or ""
-            
+
             # Auto-create a default ProductVariant for easy order matching
             ProductVariant.objects.update_or_create(
                 product=product,
@@ -118,6 +136,9 @@ class TrendyolSyncService:
                 defaults={
                     "marketplace_sku": str(stock_code).strip(),
                     "title": p_data.get("title", "")[:500],
+                    "color": color,
+                    "size": size,
+                    "stock": stock_quantity,
                 }
             )
         
@@ -196,6 +217,19 @@ class TrendyolSyncService:
                     cargo_provider = cargo_detail.get("cargoProviderName")
                 if cargo_detail.get("trackingNumber"):
                     cargo_tracking = cargo_detail.get("trackingNumber")
+
+            # cargoDeci — Trendyol'un ölçtüğü gerçek desi değeri
+            raw_deci = (
+                o_data.get("cargoDeci") or
+                o_data.get("cargoDetail", {}).get("deci") or
+                o_data.get("cargoDetail", {}).get("cargoDeci") or
+                o_data.get("desi") or
+                o_data.get("totalDesi")
+            )
+            try:
+                cargo_deci = Decimal(str(raw_deci)) if raw_deci is not None else None
+            except Exception:
+                cargo_deci = None
             
             # Country code
             country_code = "TR"
@@ -218,6 +252,7 @@ class TrendyolSyncService:
                     "country_code": country_code,
                     "cargo_provider_name": cargo_provider,
                     "cargo_tracking_number": cargo_tracking,
+                    "cargo_deci": cargo_deci,
                 }
             )
 
@@ -261,14 +296,159 @@ class TrendyolSyncService:
                     marketplace_line_id=line_id,
                     defaults=item_defaults,
                 )
-                
+
                 # Eğer variant varsa Product'ın commission_rate'ini güncelle (fallback verisi)
                 if variant and variant.product:
                     if commission_rate_raw is not None:
                         variant.product.commission_rate = Decimal(str(commission_rate_raw))
                         variant.product.save(update_fields=["commission_rate"])
 
+            # Sipariş yanıtındaki kargo tutarını kaydet (finance API'den daha güvenilir)
+            # Trendyol order response: deliveryCost veya cargoAmount alanlarından birini kullan
+            raw_cargo = (
+                o_data.get("deliveryCost") or
+                o_data.get("cargoAmount") or
+                o_data.get("totalShipmentFee") or
+                o_data.get("shipmentFee")
+            )
+            if raw_cargo:
+                try:
+                    cargo_amount = Decimal(str(raw_cargo))
+                    if cargo_amount > Decimal("0"):
+                        first_item = order.items.first()
+                        if first_item:
+                            FinancialTransaction.objects.update_or_create(
+                                organization=self.organization,
+                                order_item_ref=first_item,
+                                transaction_type=FinancialTransactionType.SHIPPING_FEE,
+                                defaults={
+                                    "amount": cargo_amount,
+                                    "occurred_at": order_date,
+                                    "raw_payload": {"source": "order_response", "field": "deliveryCost", "value": str(raw_cargo)},
+                                }
+                            )
+                except Exception as e:
+                    logger.warning(f"[SyncOrders] Kargo tutarı kaydedilemedi (order {order_number}): {e}")
+
         logger.info(f"Orders sync complete. {len(orders_data)} orders processed.")
+
+    # ------------------------------------------------------------------
+    # SELLER INVOICE SETTLEMENTS — Per-order gerçek kargo tutarları (CHE API)
+    # ------------------------------------------------------------------
+    def sync_seller_invoices_settlement(self):
+        """
+        CHE Seller Invoice Settlement API'den sipariş bazlı gerçek kargo,
+        komisyon ve hizmet bedeli tutarlarını çeker ve FinancialTransaction olarak kaydeder.
+        sync_orders()'dan sonra çalıştırılır; order_response'taki kargo tutarını override eder.
+        """
+        logger.info("Fetching seller invoice settlements (CHE API)...")
+        from datetime import timedelta
+        end_date = timezone.now()
+        start_date = end_date - timedelta(days=90)
+        start_ms = int(start_date.timestamp() * 1000)
+        end_ms = int(end_date.timestamp() * 1000)
+
+        try:
+            records = self.adapter.fetch_seller_invoices_settlement(start_ms, end_ms)
+        except Exception as e:
+            logger.warning(f"SellerInvoiceSettlement fetch failed (non-critical): {e}")
+            return
+
+        if not records:
+            logger.info("No seller invoice settlement data returned.")
+            return
+
+        processed = 0
+        for record in records:
+            # Alan adı çeşitleri: orderNumber, shipmentPackageId, packageId
+            order_number = (
+                record.get("orderNumber") or
+                record.get("shipmentPackageId") or
+                record.get("packageId")
+            )
+            if not order_number:
+                continue
+
+            order = Order.objects.filter(organization=self.organization).filter(
+                Q(order_number=str(order_number)) | Q(marketplace_order_id=str(order_number))
+            ).first()
+            if not order:
+                continue
+
+            first_item = order.items.first()
+            if not first_item:
+                continue
+
+            occurred_at_ts = record.get("transactionDate") or record.get("settlementDate")
+            if occurred_at_ts:
+                occurred_at = datetime.fromtimestamp(occurred_at_ts / 1000.0, tz=dt_timezone.utc)
+            else:
+                occurred_at = order.order_date or timezone.now()
+
+            # Kargo tutarı
+            cargo_raw = (
+                record.get("cargoAmount") or
+                record.get("shipmentFee") or
+                record.get("deliveryCost") or
+                record.get("totalShipmentFee")
+            )
+            if cargo_raw:
+                try:
+                    cargo_amount = abs(Decimal(str(cargo_raw)))
+                    if cargo_amount > Decimal("0"):
+                        FinancialTransaction.objects.update_or_create(
+                            organization=self.organization,
+                            order_item_ref=first_item,
+                            transaction_type=FinancialTransactionType.SHIPPING_FEE,
+                            defaults={
+                                "amount": cargo_amount,
+                                "occurred_at": occurred_at,
+                                "raw_payload": record,
+                            }
+                        )
+                        processed += 1
+                except Exception as e:
+                    logger.warning(f"[SellerInvoiceSettlement] Kargo TX hatası (order {order_number}): {e}")
+
+            # Komisyon tutarı
+            commission_raw = record.get("commissionAmount") or record.get("commission")
+            if commission_raw:
+                try:
+                    comm_amount = abs(Decimal(str(commission_raw)))
+                    if comm_amount > Decimal("0"):
+                        FinancialTransaction.objects.update_or_create(
+                            organization=self.organization,
+                            order_item_ref=first_item,
+                            transaction_type=FinancialTransactionType.COMMISSION,
+                            defaults={
+                                "amount": comm_amount,
+                                "occurred_at": occurred_at,
+                                "raw_payload": record,
+                            }
+                        )
+                except Exception:
+                    pass
+
+            # Hizmet bedeli
+            service_raw = record.get("serviceFee") or record.get("trendyolCut") or record.get("platformFee")
+            if service_raw:
+                try:
+                    svc_amount = abs(Decimal(str(service_raw)))
+                    if svc_amount > Decimal("0"):
+                        FinancialTransaction.objects.update_or_create(
+                            organization=self.organization,
+                            order_item_ref=first_item,
+                            transaction_type=FinancialTransactionType.SERVICE_FEE,
+                            defaults={
+                                "amount": svc_amount,
+                                "occurred_at": occurred_at,
+                                "raw_payload": record,
+                            }
+                        )
+                except Exception:
+                    pass
+
+        logger.info(f"SellerInvoiceSettlement sync complete. {processed} cargo records processed from {len(records)} records.")
 
     # ------------------------------------------------------------------
     # SETTLEMENTS — Gerçek finansal veriler (komisyon, kargo, hizmet bedeli)
@@ -363,38 +543,61 @@ class TrendyolSyncService:
     # ------------------------------------------------------------------
     # CARGO INVOICES — Detaylı kargo kesinti faturaları
     # ------------------------------------------------------------------
+    def _extract_cargo_invoice_ids(self, records: list) -> set:
+        """Verilen kayıt listesinden Kargo Faturası invoice ID'lerini çıkar."""
+        CARGO_TYPES = {
+            "DeductionInvoices", "Kargo Faturası", "Kargo Fatura",
+            "kargo faturası", "kargo fatura", "DEDUCTION_INVOICES",
+        }
+        ids = set()
+        for rec in records:
+            tx_type = rec.get("transactionType", "")
+            # Kargo Faturası tipi veya içinde "kargo" geçen tipler
+            if tx_type in CARGO_TYPES or "kargo" in tx_type.lower():
+                inv_id = (rec.get("id") or rec.get("invoiceSerialNumber")
+                          or rec.get("invoiceId") or rec.get("serialNumber"))
+                if inv_id:
+                    ids.add(str(inv_id))
+        return ids
+
     def sync_cargo_invoices(self):
         """
-        OtherFinancials API üzerinden DeductionInvoices çekilir, 
-        daha sonra Cargo Invoice API üzerinden sipariş bazlı kargo kesintileri işlenir.
+        Kargo Faturası invoice ID'lerini birden fazla kaynaktan toplar:
+        1. OtherFinancials (CHE) API — ana kaynak
+        2. Settlements API — fallback
+        Ardından Cargo Invoice Items API ile sipariş bazlı gerçek tutarları kaydeder.
         """
         logger.info("Fetching cargo invoices...")
-        try:
-            # Sadece son 30 günü çek, Trendyol OtherFinancials 30 günden eskisini kilitler
-            end_date = timezone.now()
-            start_date = end_date - timedelta(days=30)
-            start_ms = int(start_date.timestamp() * 1000)
-            end_ms = int(end_date.timestamp() * 1000)
-            
-            financials_data = self.adapter.fetch_other_financials(start_ms, end_ms)
-        except Exception as e:
-            logger.warning(f"Cargo Invoices fetch failed (non-critical): {e}")
-            return
-
-        if not financials_data:
-            logger.info("No OtherFinancials data returned.")
-            return
+        end_date   = timezone.now()
+        start_date = end_date - timedelta(days=30)
+        start_ms   = int(start_date.timestamp() * 1000)
+        end_ms     = int(end_date.timestamp() * 1000)
 
         invoice_ids = set()
-        for f_data in financials_data:
-            # Kargo Faturası kesintilerini filtrele
-            if f_data.get("transactionType") in ["DeductionInvoices", "Kargo Faturası", "Kargo Fatura"]:
-                invoice_id = f_data.get("id") or f_data.get("invoiceSerialNumber") or f_data.get("invoiceId")
-                if invoice_id:
-                    invoice_ids.add(str(invoice_id))
+
+        # ── Kaynak 1: OtherFinancials (CHE) ──
+        try:
+            of_data = self.adapter.fetch_other_financials(start_ms, end_ms)
+            if of_data:
+                ids = self._extract_cargo_invoice_ids(of_data)
+                logger.info(f"OtherFinancials: {len(of_data)} records, {len(ids)} cargo invoice IDs")
+                invoice_ids |= ids
+        except Exception as e:
+            logger.warning(f"OtherFinancials fetch error (non-critical): {e}")
+
+        # ── Kaynak 2: Settlements API (fallback) ──
+        if not invoice_ids:
+            try:
+                settle_data = self.adapter.fetch_financials(start_ms, end_ms)
+                if settle_data:
+                    ids = self._extract_cargo_invoice_ids(settle_data)
+                    logger.info(f"Settlements: {len(settle_data)} records, {len(ids)} cargo invoice IDs")
+                    invoice_ids |= ids
+            except Exception as e:
+                logger.warning(f"Settlements fetch error (non-critical): {e}")
 
         if not invoice_ids:
-            logger.info("No cargo invoices found in the recent period.")
+            logger.info("No cargo invoice IDs found from any source.")
             return
 
         processed_count = 0
@@ -405,25 +608,41 @@ class TrendyolSyncService:
                     continue
                 
                 for item in cargo_items:
-                    order_number = item.get("orderNumber")
+                    order_number = (item.get("orderNumber") or item.get("order_number")
+                                    or item.get("orderNo") or item.get("orderId"))
                     if not order_number:
                         continue
 
+                    cargo_amount = Decimal(str(item.get("amount", "0")))
+                    if cargo_amount <= 0:
+                        continue
+
+                    pkg_type = (item.get("shipmentPackageType") or item.get("shipmentType")
+                                or item.get("packageType") or "")
+
+                    # Her zaman CargoInvoice'a kaydet (order DB'de olmasa bile)
+                    CargoInvoice.objects.update_or_create(
+                        organization=self.organization,
+                        order_number=str(order_number),
+                        invoice_serial_number=str(inv_id),
+                        defaults={
+                            "amount": cargo_amount,
+                            "desi": item.get("desi"),
+                            "shipment_package_type": pkg_type,
+                            "raw_payload": item,
+                        }
+                    )
+
+                    # FinancialTransaction'a da kaydet (order bulunabilirse)
                     order = Order.objects.filter(
                         organization=self.organization
                     ).filter(
                         Q(order_number=str(order_number)) | Q(marketplace_order_id=str(order_number))
                     ).first()
 
-                    if not order:
-                        # logger.debug(f"Order {order_number} not found, skipping cargo item.")
-                        continue
-
-                    cargo_amount = Decimal(str(item.get("amount", "0")))
-                    if cargo_amount > 0:
+                    if order:
                         first_item = order.items.first()
                         if first_item:
-                            # Use invoice date if available, else order date
                             invoice_date_str = item.get("invoiceDate")
                             if invoice_date_str:
                                 try:
@@ -443,7 +662,7 @@ class TrendyolSyncService:
                                     "raw_payload": item,
                                 }
                             )
-                            processed_count += 1
+                    processed_count += 1
             except Exception as e:
                 logger.warning(f"Failed to process cargo invoice {inv_id}: {e}")
 

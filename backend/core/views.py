@@ -70,6 +70,46 @@ class TriggerSyncView(APIView):
             
         return Response({"message": f"{accounts.count()} hesap için senkronizasyon başarıyla tamamlandı."})
 
+
+class ProductStockSyncView(APIView):
+    """
+    POST /api/products/sync-stock/
+    Sadece ürün stok bilgilerini Trendyol'dan çeker ve günceller (sipariş/hakediş senkronizasyonu yapmaz).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from core.models import UserProfile
+        from core.services.sync_service import TrendyolSyncService
+        from core.utils.encryption import decrypt_value
+
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        org = profile.organization
+        if not org:
+            return Response({"error": "Organizasyon bulunamadı."}, status=404)
+
+        accounts = MarketplaceAccount.objects.filter(
+            organization=org,
+            channel=MarketplaceAccount.Channel.TRENDYOL,
+            is_active=True
+        )
+        if not accounts.exists():
+            return Response({"error": "Aktif bir Trendyol API hesabı bulunamadı. Lütfen Ayarlar > Trendyol bölümünden API kimlik bilgilerinizi ekleyin."}, status=404)
+
+        synced_count = 0
+        for acc in accounts:
+            try:
+                service = TrendyolSyncService(acc)
+                service.sync_products()
+                synced_count += 1
+            except ValueError as e:
+                return Response({"error": str(e)}, status=400)
+            except Exception as e:
+                return Response({"error": f"Stok senkronizasyonu sırasında hata oluştu: {str(e)}"}, status=500)
+
+        return Response({"message": f"Stok bilgileri güncellendi. {synced_count} Trendyol hesabı senkronize edildi."})
+
+
 class DashboardOverviewView(APIView):
     """
     GET /api/dashboard/overview
@@ -587,18 +627,22 @@ class ProductListView(APIView):
         
         two_months_ago = timezone.now() - datetime.timedelta(days=60)
         
-        products = Product.objects.filter(
+        from django.db.models import Max
+        
+        # Paginate by unique marketplace_skus (Model Codes)
+        skus_qs = Product.objects.filter(
             organization=org,
             is_active=True
-        ).prefetch_related('variants').order_by(
-            django_models.F('trendyol_created_at').desc(nulls_last=True)
-        ).distinct()
-        
+        ).values('marketplace_sku').annotate(
+            latest_created_at=Max('trendyol_created_at')
+        ).order_by('-latest_created_at')
+
         search = request.GET.get('search', '').strip()
         if search:
-            products = products.filter(
+            skus_qs = skus_qs.filter(
                 Q(title__icontains=search) |
                 Q(barcode__icontains=search) |
+                Q(marketplace_sku__icontains=search) |
                 Q(variants__barcode__icontains=search) |
                 Q(variants__title__icontains=search)
             ).distinct()
@@ -608,16 +652,28 @@ class ProductListView(APIView):
         paginator.page_size_query_param = 'page_size'
         paginator.max_page_size = 100
         
-        paginated_products = paginator.paginate_queryset(products, request)
+        paginated_skus = paginator.paginate_queryset(skus_qs, request)
+        current_skus = [item['marketplace_sku'] for item in paginated_skus]
+        
+        # Fetch full data for these SKUs
+        products = Product.objects.filter(
+            organization=org,
+            marketplace_sku__in=current_skus,
+            is_active=True
+        ).prefetch_related('variants').order_by(
+            django_models.F('trendyol_created_at').desc(nulls_last=True)
+        )
         
         # Simple serialization
         data = []
-        for p in paginated_products:
+        for p in products:
             product_data = {
                 "id": p.id,
                 "title": p.title,
                 "barcode": p.barcode,
                 "marketplace_sku": p.marketplace_sku,
+                "trendyol_content_id": p.trendyol_content_id,
+                "currency": p.currency,
                 "sale_price": str(p.sale_price),
                 "vat_rate": str(p.vat_rate),
                 "commission_rate": str(p.commission_rate),
@@ -627,20 +683,28 @@ class ProductListView(APIView):
                 "brand": p.brand,
                 "return_rate": str(p.return_rate),
                 "fast_delivery": p.fast_delivery,
+                "current_stock": p.current_stock,
                 "is_active": p.is_active,
                 "variants": [
                     {
                         "id": v.id,
                         "title": v.title,
                         "barcode": v.barcode,
+                        "marketplace_sku": v.marketplace_sku,
                         "cost_price": str(v.cost_price),
                         "cost_vat_rate": str(v.cost_vat_rate),
-                        "desi": str(v.desi) if v.desi is not None else None
+                        "desi": str(v.desi) if v.desi is not None else None,
+                        "color": v.color,
+                        "size": v.size,
+                        "stock": v.stock,
+                        "extra_cost_rate": str(v.extra_cost_rate),
+                        "extra_cost_amount": str(v.extra_cost_amount),
                     } for v in p.variants.all()
                 ]
             }
             data.append(product_data)
 
+        # Total count should be count of distinct SKUs
         return paginator.get_paginated_response(data)
 
     def patch(self, request):
@@ -746,9 +810,12 @@ class OrderListView(APIView):
         from core.services.profit_calculator import ProfitCalculator
         from decimal import Decimal
         
-        # Sadece bu organizasyona ait olan siparişleri getir
+        # Sadece bu organizasyona ait olan siparişleri getir, iptal edilenleri hariç tut
         # prefetch_related ile db call optimizasyonu
-        orders = Order.objects.filter(marketplace_account__organization=org).prefetch_related('items__product_variant__product', 'items__transactions').order_by('-order_date')
+        CANCELLED_STATUSES = ['Cancelled', 'Canceled', 'İptal', 'iptal', 'CANCELLED', 'CANCELED']
+        orders = Order.objects.filter(marketplace_account__organization=org).exclude(
+            status__in=CANCELLED_STATUSES
+        ).prefetch_related('items__product_variant__product', 'items__transactions').order_by('-order_date')
         
         min_date_str = request.query_params.get("min_date")
         max_date_str = request.query_params.get("max_date")
@@ -767,91 +834,193 @@ class OrderListView(APIView):
 
         data = []
         for order in orders:
-            total_gross = Decimal("0.00")
-            total_net_profit = Decimal("0.00")
-            
-            items_data = []
-            
-            cum_breakdown = {
-                "product_cost": Decimal("0.00"),
-                "commission": Decimal("0.00"),
-                "shipping_fee": Decimal("0.00"),
-                "service_fee": Decimal("0.00"),
-                "withholding": Decimal("0.00"),
-                "net_kdv": Decimal("0.00"),
-                "satis_kdv": Decimal("0.00"),
-                "alis_kdv": Decimal("0.00"),
-                "kargo_kdv": Decimal("0.00"),
-                "komisyon_kdv": Decimal("0.00"),
-                "hizmet_bedeli_kdv": Decimal("0.00"),
-            }
+            # Sipariş bazlı kârlılık hesabı — kargo ve hizmet bedeli TEK kez uygulanır
+            calc = ProfitCalculator.calculate_for_order(order)
+            kd   = calc["kdv_detail"]
 
+            # Per-item display data (komisyon oranı ve fiyat için)
+            items_data = []
             for item in order.items.all():
-                profit_info = ProfitCalculator.calculate_for_order_item(item)
-                
-                total_gross += profit_info["gross_revenue"]
-                total_net_profit += profit_info["net_profit"]
-                
-                bd = profit_info["breakdown"]
-                cum_breakdown["product_cost"] += bd.get("PRODUCT_COST", Decimal("0.00"))
-                cum_breakdown["commission"] += bd.get("COMMISSION", Decimal("0.00"))
-                cum_breakdown["shipping_fee"] += bd.get("SHIPPING_FEE", Decimal("0.00"))
-                cum_breakdown["service_fee"] += bd.get("SERVICE_FEE", Decimal("0.00"))
-                cum_breakdown["withholding"] += bd.get("WITHHOLDING", Decimal("0.00"))
-                
-                kdv = profit_info.get("kdv_detail", {})
-                cum_breakdown["net_kdv"] += kdv.get("net_kdv", Decimal("0.00"))
-                cum_breakdown["satis_kdv"] += kdv.get("satis_kdv", Decimal("0.00"))
-                cum_breakdown["alis_kdv"] += kdv.get("alis_kdv", Decimal("0.00"))
-                cum_breakdown["kargo_kdv"] += kdv.get("kargo_kdv", Decimal("0.00"))
-                cum_breakdown["komisyon_kdv"] += kdv.get("komisyon_kdv", Decimal("0.00"))
-                cum_breakdown["hizmet_bedeli_kdv"] += kdv.get("hizmet_bedeli_kdv", Decimal("0.00"))
-                
-                title = "Bilinmeyen Ürün"
-                barcode = item.sku
+                item_r = ProfitCalculator.calculate_for_order_item(item)
+                bd_item = item_r["breakdown"]
+                title          = "Bilinmeyen Ürün"
+                barcode        = item.sku
                 commission_rate = item.applied_commission_rate or Decimal("0.00")
-                image_url = ""
+                image_url      = ""
                 if item.product_variant and item.product_variant.product:
-                    title = item.product_variant.product.title
-                    barcode = item.product_variant.barcode
-                    image_url = item.product_variant.product.image_url or ""
+                    title      = item.product_variant.product.title
+                    barcode    = item.product_variant.barcode
+                    image_url  = item.product_variant.product.image_url or ""
                     if commission_rate == Decimal("0.00"):
                         commission_rate = item.product_variant.product.commission_rate
-                
                 items_data.append({
-                    "id": item.id,
-                    "title": title,
-                    "barcode": barcode,
-                    "quantity": item.quantity,
+                    "id":               item.id,
+                    "title":            title,
+                    "barcode":          barcode,
+                    "quantity":         item.quantity,
                     "sale_price_gross": str(item.sale_price_gross),
-                    "commission_rate": str(commission_rate),
-                    "image_url": image_url,
-                    "profit": profit_info
+                    "commission_rate":  str(commission_rate),
+                    "commission_cost":  str(bd_item.get("COMMISSION", Decimal("0.00"))),
+                    "image_url":        image_url,
                 })
-                
-            profit_margin = Decimal("0.00")
-            if total_gross > Decimal("0.00"):
-                profit_margin = round((total_net_profit / total_gross) * Decimal("100.00"), 2)
-                
-            profit_on_cost = Decimal("0.00")
-            if cum_breakdown["product_cost"] > Decimal("0.00"):
-                profit_on_cost = round((total_net_profit / cum_breakdown["product_cost"]) * Decimal("100.00"), 2)
 
             data.append({
-                "id": order.id,
-                "order_number": order.order_number,
-                "order_date": format_date_tr(order.order_date),
-                "status": order.status,
+                "id":             order.id,
+                "order_number":   order.order_number,
+                "order_date":     format_date_tr(order.order_date),
+                "status":         order.status,
                 "is_micro_export": order.channel == 'micro_export',
-                "total_gross": str(total_gross),
-                "total_profit": str(total_net_profit),
-                "profit_margin": str(profit_margin),
-                "profit_on_cost": str(profit_on_cost),
-                "items": items_data,
-                "aggregated_breakdown": {k: str(v) for k, v in cum_breakdown.items()}
+                "total_gross":    str(calc["total_sale"]),
+                "total_profit":   str(calc["net_profit"]),
+                "profit_margin":  str(calc["profit_margin"]),
+                "profit_on_cost": str(calc["profit_on_cost"]),
+                "items":          items_data,
+                "aggregated_breakdown": {
+                    "product_cost":       str(calc["product_cost"]),
+                    "extra_cost":         str(calc["extra_product_cost"]),
+                    "commission":         str(calc["commission"]),
+                    "shipping_fee":       str(calc["cargo"]),
+                    "cargo_source":       calc.get("cargo_source", "estimated"),
+                    "service_fee":        str(calc["service_fee"]),
+                    "withholding":        str(calc["withholding"]),
+                    "net_kdv":            str(kd["net_kdv"]),
+                    "satis_kdv":          str(kd["satis_kdv"]),
+                    "alis_kdv":           str(kd["alis_kdv"]),
+                    "kargo_kdv":          str(kd["kargo_kdv"]),
+                    "komisyon_kdv":       str(kd["komisyon_kdv"]),
+                    "hizmet_bedeli_kdv":  str(kd["hizmet_bedeli_kdv"]),
+                },
             })
 
         return Response({"ok": True, "data": data})
+
+
+class OrderExcelExportView(APIView):
+    """
+    GET /api/orders/export-excel/
+    Sipariş kârlılık verilerini Excel olarak dışa aktarır.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            profile = request.user.profile
+            org = profile.organization
+        except Exception:
+            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+
+        from core.models import Order
+        from core.services.profit_calculator import ProfitCalculator
+        from decimal import Decimal
+        import openpyxl
+        from openpyxl.styles import PatternFill, Font, Alignment
+        from io import BytesIO
+        from django.http import HttpResponse
+
+        orders = Order.objects.filter(
+            marketplace_account__organization=org
+        ).prefetch_related(
+            'items__product_variant__product',
+            'items__transactions'
+        ).order_by('-order_date')
+
+        min_date_str = request.query_params.get("min_date")
+        max_date_str = request.query_params.get("max_date")
+
+        if min_date_str and max_date_str:
+            from datetime import datetime
+            try:
+                min_date = timezone.make_aware(datetime.strptime(min_date_str, "%Y-%m-%d"))
+                max_date = timezone.make_aware(datetime.strptime(max_date_str + " 23:59:59", "%Y-%m-%d %H:%M:%S"))
+                orders = orders.filter(order_date__gte=min_date, order_date__lte=max_date)
+            except ValueError:
+                pass
+        else:
+            orders = orders[:200]
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Sipariş Kârlılık"
+
+        header_fill = PatternFill(start_color="1E3A5F", end_color="1E3A5F", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True, size=10)
+        profit_fill = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")
+        loss_fill = PatternFill(start_color="FFCDD2", end_color="FFCDD2", fill_type="solid")
+
+        columns = [
+            "Sipariş Numarası", "Sipariş Tarihi", "Durum",
+            "Sipariş Tutarı (₺)", "Ürün Maliyeti (₺)", "Ek Ürün Maliyeti (₺)",
+            "Kargo Ücreti (₺)", "Komisyon Tutarı (₺)", "Hizmet Bedeli (₺)",
+            "Stopaj Kesintisi (₺)", "Net KDV (₺)", "Kâr Tutarı (₺)",
+            "Kâr Oranı (%)", "Kâr Marjı (%)",
+        ]
+
+        ws.append(columns)
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 25
+        for i, _ in enumerate(columns, 1):
+            ws.column_dimensions[ws.cell(1, i).column_letter].width = 22
+
+        for order in orders:
+            total_gross = Decimal("0.00")
+            total_profit = Decimal("0.00")
+            bd = {k: Decimal("0.00") for k in ["product_cost", "extra_cost", "commission", "shipping_fee", "service_fee", "withholding", "net_kdv"]}
+
+            for item in order.items.all():
+                pi = ProfitCalculator.calculate_for_order_item(item)
+                total_gross += pi["gross_revenue"]
+                total_profit += pi["net_profit"]
+                b = pi["breakdown"]
+                bd["product_cost"] += b.get("PRODUCT_COST", Decimal("0.00"))
+                bd["extra_cost"] += pi.get("extra_product_cost", Decimal("0.00"))
+                bd["commission"] += b.get("COMMISSION", Decimal("0.00"))
+                bd["shipping_fee"] += b.get("SHIPPING_FEE", Decimal("0.00"))
+                bd["service_fee"] += b.get("SERVICE_FEE", Decimal("0.00"))
+                bd["withholding"] += b.get("WITHHOLDING", Decimal("0.00"))
+                bd["net_kdv"] += pi.get("kdv_detail", {}).get("net_kdv", Decimal("0.00"))
+
+            profit_margin = round((total_profit / total_gross) * 100, 2) if total_gross > 0 else Decimal("0.00")
+            profit_on_cost = round((total_profit / bd["product_cost"]) * 100, 2) if bd["product_cost"] > 0 else Decimal("0.00")
+            base_cost = bd["product_cost"] - bd["extra_cost"]
+
+            ws.append([
+                order.order_number,
+                format_date_tr(order.order_date),
+                order.status,
+                float(total_gross),
+                float(base_cost),
+                float(bd["extra_cost"]),
+                float(bd["shipping_fee"]),
+                float(bd["commission"]),
+                float(bd["service_fee"]),
+                float(bd["withholding"]),
+                float(bd["net_kdv"]),
+                float(total_profit),
+                float(profit_on_cost),
+                float(profit_margin),
+            ])
+
+            last_row = ws.max_row
+            profit_cell = ws.cell(last_row, 12)
+            if total_profit > 0:
+                profit_cell.fill = profit_fill
+            elif total_profit < 0:
+                profit_cell.fill = loss_fill
+
+        buffer = BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+
+        response = HttpResponse(
+            buffer.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        response["Content-Disposition"] = 'attachment; filename="Siparis_Karliligi.xlsx"'
+        return response
+
 
 class ProductAnalysisView(APIView):
     """
@@ -1268,84 +1437,85 @@ from django.http import HttpResponse
 class ProductExcelExportView(APIView):
     """
     GET /api/products/export-excel/
-    Generates and returns an Excel file of products and variants.
+    13 sütunlu Excel dosyası oluşturur.
+    Sütunlar: Barkod, Model Kodu, Stok Kodu, Kategori İsmi, Ürün Adı,
+              Trendyol Satış Fiyatı, Stok, Ürün Maliyeti (KDV Dahil),
+              Maliyet KDV Oranı, Para Birimi, Ürün Desisi,
+              Ekstra Maliyet (%), Ekstra Maliyet (TL)
+    Mavi = Trendyol'dan otomatik doldurulur (salt okunur)
+    Sarı  = Kullanıcı tarafından düzenlenir
     """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        user = request.user
-        from core.models import UserProfile, Organization, Product
-        profile, _ = UserProfile.objects.get_or_create(user=user)
+        from core.models import UserProfile, Product
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
         org = profile.organization
 
-        products = Product.objects.filter(organization=org, is_active=True).prefetch_related('variants')
+        products = Product.objects.filter(organization=org, is_active=True).prefetch_related('variants').order_by(
+            django_models.F('trendyol_created_at').desc(nulls_last=True)
+        )
 
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = "Ürün Maliyetleri"
+        ws.title = "Urun Maliyetleri"
 
-        headers = [
-            "Barkod", "Model Kodu", "Stok kodu", "Kategori İsmi", "Ürün Adı", 
-            "Trendyol Satış Fiyatı", "Stok", "Ürün Maliyeti ( KDV Dahil)", 
-            "Maliyet KDV Oranı", "Para Birimi", "Ürün Desisi", "Bugün Kargoda Etiketi", 
-            "Ekstra Maliyet (%)", "Ekstra Maliyet (TL)"
+        # Column definitions: (header, editable)
+        COLUMNS = [
+            ("Barkod",                    False),  # 1  — Trendyol
+            ("Model Kodu",                False),  # 2  — Trendyol
+            ("Stok Kodu",                 False),  # 3  — Trendyol
+            ("Kategori İsmi",             False),  # 4  — Trendyol
+            ("Ürün Adı",                  False),  # 5  — Trendyol
+            ("Trendyol Satış Fiyatı",     False),  # 6  — Trendyol
+            ("Stok",                      False),  # 7  — Trendyol
+            ("Ürün Maliyeti (KDV Dahil)", True),   # 8  — Kullanıcı
+            ("Maliyet KDV Oranı",         True),   # 9  — Kullanıcı (default: Trendyol KDV)
+            ("Para Birimi",               False),  # 10 — Trendyol
+            ("Ürün Desisi",               True),   # 11 — Kullanıcı (default: 1)
+            ("Ekstra Maliyet (%)",        True),   # 12 — Kullanıcı
+            ("Ekstra Maliyet (TL)",       True),   # 13 — Kullanıcı
         ]
 
-        header_fill = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
+        info_fill = PatternFill(start_color="DBEAFE", end_color="DBEAFE", fill_type="solid")  # mavi
+        edit_fill = PatternFill(start_color="FEF9C3", end_color="FEF9C3", fill_type="solid")  # sarı
         header_font = Font(bold=True)
-        yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-        teal_fill = PatternFill(start_color="008080", end_color="008080", fill_type="solid")
-        teal_font = Font(bold=True, color="FFFFFF")
 
-        for col_num, header_title in enumerate(headers, 1):
+        for col_num, (header_title, editable) in enumerate(COLUMNS, 1):
             cell = ws.cell(row=1, column=col_num, value=header_title)
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center")
-            if "Maliyet" in header_title or "KDV " in header_title or "Para Birimi" in header_title or "Desisi" in header_title or "Bugün Kargo" in header_title:
-                if "Ekstra" in header_title:
-                    cell.fill = teal_fill
-                    cell.font = teal_font
-                else:
-                    cell.fill = yellow_fill
-            else:
-                cell.fill = header_fill
+            cell.fill = edit_fill if editable else info_fill
 
         row_num = 2
         for product in products:
             for variant in product.variants.all():
-                ws.cell(row=row_num, column=1, value=variant.barcode)
-                ws.cell(row=row_num, column=2, value=product.marketplace_sku)
-                ws.cell(row=row_num, column=3, value=variant.marketplace_sku or product.marketplace_sku)
-                ws.cell(row=row_num, column=4, value=product.category_name)
-                ws.cell(row=row_num, column=5, value=variant.title or product.title)
-                ws.cell(row=row_num, column=6, value=float(product.sale_price))
-                ws.cell(row=row_num, column=7, value=product.current_stock)
-                
-                # Editable fields
-                ws.cell(row=row_num, column=8, value=float(variant.cost_price))
-                ws.cell(row=row_num, column=9, value=float(variant.cost_vat_rate))
-                ws.cell(row=row_num, column=10, value="TRY")
-                ws.cell(row=row_num, column=11, value=float(variant.desi) if variant.desi is not None else float(product.desi))
-                ws.cell(row=row_num, column=12, value="Evet" if product.fast_delivery else "Hayır")
-                ws.cell(row=row_num, column=13, value=0) # Ekstra Maliyet (%) placeholders
-                ws.cell(row=row_num, column=14, value=0) # Ekstra Maliyet (TL) placeholders
-                
+                desi_val = float(variant.desi) if variant.desi is not None else float(product.desi if product.desi else 1)
+                # Maliyet KDV Oranı: Kullanıcı girdiyse onu göster, yoksa Trendyol satış KDV'sini default al
+                cost_vat = float(variant.cost_vat_rate) if variant.cost_vat_rate else float(product.vat_rate)
+
+                ws.cell(row=row_num, column=1,  value=variant.barcode)
+                ws.cell(row=row_num, column=2,  value=product.marketplace_sku)
+                ws.cell(row=row_num, column=3,  value=variant.marketplace_sku or "")
+                ws.cell(row=row_num, column=4,  value=product.category_name or "")
+                ws.cell(row=row_num, column=5,  value=variant.title or product.title)
+                ws.cell(row=row_num, column=6,  value=float(product.sale_price))
+                ws.cell(row=row_num, column=7,  value=variant.stock)
+                ws.cell(row=row_num, column=8,  value=float(variant.cost_price))
+                ws.cell(row=row_num, column=9,  value=cost_vat)
+                ws.cell(row=row_num, column=10, value=product.currency or "TRY")
+                ws.cell(row=row_num, column=11, value=desi_val)
+                ws.cell(row=row_num, column=12, value=float(variant.extra_cost_rate))
+                ws.cell(row=row_num, column=13, value=float(variant.extra_cost_amount))
                 row_num += 1
 
+        # Auto column widths
         for col in ws.columns:
-            max_length = 0
-            column = col[0].column_letter
-            for cell in col:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except:
-                    pass
-            adjusted_width = (max_length + 2)
-            ws.column_dimensions[column].width = min(adjusted_width, 50)
+            max_length = max((len(str(cell.value or "")) for cell in col), default=0)
+            ws.column_dimensions[col[0].column_letter].width = min(max_length + 4, 50)
 
         response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        response['Content-Disposition'] = 'attachment; filename="Urun_Maliyetleri.xlsx"'
+        response['Content-Disposition'] = "attachment; filename*=UTF-8''Urun_Maliyetleri.xlsx"
         wb.save(response)
         return response
 
@@ -1353,100 +1523,447 @@ class ProductExcelExportView(APIView):
 class ProductExcelImportView(APIView):
     """
     POST /api/products/import-excel/
-    Parses uploaded Excel file to update Product and ProductVariant costs, vat, desi etc.
+    Excel dosyasındaki maliyet, KDV, desi ve ekstra maliyet bilgilerini veritabanına kaydeder.
+    Zorunlu: Barkod
+    Desteklenen sütunlar: Ürün Maliyeti (KDV Dahil), Maliyet KDV Oranı, Ürün Desisi,
+                          Ekstra Maliyet (%), Ekstra Maliyet (TL)
     """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        user = request.user
-        from core.models import UserProfile, Organization, ProductVariant
+        from core.models import UserProfile, ProductVariant
         from decimal import Decimal
-        
-        profile, _ = UserProfile.objects.get_or_create(user=user)
+
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
         org = profile.organization
 
         file = request.FILES.get('file')
         if not file:
             return Response({"error": "Dosya bulunamadı."}, status=400)
-
-        if not file.name.endswith('.xlsx') and not file.name.endswith('.xls'):
+        if not (file.name.endswith('.xlsx') or file.name.endswith('.xls')):
             return Response({"error": "Geçersiz dosya formatı. Lütfen .xlsx veya .xls yükleyin."}, status=400)
+
+        def parse_decimal(val):
+            if val is None or str(val).strip() == "":
+                return None
+            try:
+                s = str(val).strip()
+                if ',' in s and '.' in s:
+                    s = s.replace('.', '').replace(',', '.')
+                elif ',' in s:
+                    s = s.replace(',', '.')
+                return Decimal(s)
+            except Exception:
+                return None
+
+        def parse_barcode(raw):
+            if raw is None:
+                return None
+            if isinstance(raw, float):
+                return str(int(raw)).strip()
+            s = str(raw).strip()
+            return s[:-2] if s.endswith('.0') else s
 
         try:
             wb = openpyxl.load_workbook(file, data_only=True)
             ws = wb.active
-            
-            headers = {}
-            for index, cell in enumerate(ws[1]):
-                if cell.value:
-                    headers[str(cell.value).strip()] = index
 
-            # Required headers check
-            required_cols = ["Barkod", "Ürün Maliyeti ( KDV Dahil)", "Maliyet KDV Oranı"]
-            if not all(col in headers for col in required_cols):
-                 return Response({"error": f"Eksik sütunlar. Excel dosyanızda şu sütunlar olmalı: {', '.join(required_cols)}"}, status=400)
+            headers = {}
+            for idx, cell in enumerate(ws[1]):
+                if cell.value:
+                    headers[str(cell.value).strip()] = idx
+
+            def get_col(names):
+                for n in names:
+                    if n in headers:
+                        return headers[n]
+                return None
+
+            idx_barkod       = get_col(["Barkod"])
+            idx_cost         = get_col(["Ürün Maliyeti (KDV Dahil)", "KDV Dahil Maliyet", "Ürün Maliyeti ( KDV Dahil)"])
+            idx_vat          = get_col(["Maliyet KDV Oranı", "KDV Oranı"])
+            idx_desi         = get_col(["Ürün Desisi", "Desi"])
+            idx_extra_rate   = get_col(["Ekstra Maliyet (%)"])
+            idx_extra_amount = get_col(["Ekstra Maliyet (TL)"])
+
+            if idx_barkod is None:
+                return Response({"error": "Eksik sütun: 'Barkod' sütunu bulunamadı."}, status=400)
+            if idx_cost is None:
+                return Response({"error": "Eksik sütun: 'Ürün Maliyeti (KDV Dahil)' sütunu bulunamadı."}, status=400)
 
             updated_variants = 0
-            
-            # Map index
-            idx_barkod = headers["Barkod"]
-            idx_cost = headers["Ürün Maliyeti ( KDV Dahil)"]
-            idx_vat = headers["Maliyet KDV Oranı"]
-            idx_desi = headers.get("Ürün Desisi")
-            idx_fast = headers.get("Bugün Kargoda Etiketi")
+            unmatched_barcodes = []
 
             for row in ws.iter_rows(min_row=2, values_only=True):
-                if not row or not row[idx_barkod]:
+                if not row:
                     continue
-                    
-                barcode = str(row[idx_barkod]).strip()
+                barcode = parse_barcode(row[idx_barkod])
+                if not barcode:
+                    continue
+
                 variant = ProductVariant.objects.select_related('product').filter(
                     barcode=barcode, product__organization=org
                 ).first()
                 if variant is None:
-                    continue  # Barkoda uyan varyant bulunamadı, satırı atla
-                    
+                    unmatched_barcodes.append(barcode)
+                    continue
+
                 try:
-                    # Update cost fields
-                    cost_val = row[idx_cost]
-                    vat_val = row[idx_vat]
+                    variant_fields = []
+                    product_fields = []
 
-                    variant_fields_to_save = []
-                    product_fields_to_save = []
+                    clean_cost = parse_decimal(row[idx_cost])
+                    if clean_cost is not None:
+                        variant.cost_price = clean_cost
+                        variant_fields.append("cost_price")
 
-                    if cost_val is not None:
-                        variant.cost_price = Decimal(str(cost_val).replace(',', '.'))
-                        variant_fields_to_save.append("cost_price")
-                    if vat_val is not None:
-                        variant.cost_vat_rate = Decimal(str(vat_val).replace(',', '.'))
-                        variant_fields_to_save.append("cost_vat_rate")
+                    if idx_vat is not None:
+                        clean_vat = parse_decimal(row[idx_vat])
+                        if clean_vat is not None:
+                            variant.cost_vat_rate = clean_vat
+                            variant_fields.append("cost_vat_rate")
 
-                    # Update Desi
-                    if idx_desi is not None and row[idx_desi] is not None:
-                        desi_val = Decimal(str(row[idx_desi]).replace(',', '.'))
-                        variant.desi = desi_val
-                        variant_fields_to_save.append("desi")
-                        variant.product.desi = desi_val
-                        product_fields_to_save.append("desi")
+                    if idx_desi is not None:
+                        clean_desi = parse_decimal(row[idx_desi])
+                        if clean_desi is not None:
+                            variant.desi = clean_desi
+                            variant_fields.append("desi")
+                            variant.product.desi = clean_desi
+                            product_fields.append("desi")
 
-                    # Update fast delivery flag on parent
-                    if idx_fast is not None and row[idx_fast] is not None:
-                        fast_str = str(row[idx_fast]).strip().lower()
-                        variant.product.fast_delivery = (fast_str == "evet")
-                        product_fields_to_save.append("fast_delivery")
+                    if idx_extra_rate is not None:
+                        clean_rate = parse_decimal(row[idx_extra_rate])
+                        if clean_rate is not None:
+                            variant.extra_cost_rate = clean_rate
+                            variant_fields.append("extra_cost_rate")
 
-                    if product_fields_to_save:
-                        variant.product.save(update_fields=product_fields_to_save)
-                    if variant_fields_to_save:
-                        variant.save(update_fields=variant_fields_to_save)
+                    if idx_extra_amount is not None:
+                        clean_amount = parse_decimal(row[idx_extra_amount])
+                        if clean_amount is not None:
+                            variant.extra_cost_amount = clean_amount
+                            variant_fields.append("extra_cost_amount")
+
+                    if product_fields:
+                        variant.product.save(update_fields=list(set(product_fields)))
+                    if variant_fields:
+                        variant.save(update_fields=variant_fields)
                     updated_variants += 1
 
                 except Exception as e:
-                    # Log error for specific row but continue processing others
-                    print(f"Error processing row with barcode {barcode}: {e}")
-                    pass
-            
-            return Response({"ok": True, "message": f"{updated_variants} ürün/varyant başarıyla güncellendi."})
+                    import logging
+                    logging.getLogger(__name__).warning(f"Excel import row error (barcode={barcode}): {e}")
+
+            msg = f"{updated_variants} varyant başarıyla güncellendi."
+            if unmatched_barcodes:
+                msg += f" {len(unmatched_barcodes)} barkod sistemde bulunamadı."
+
+            return Response({"ok": True, "message": msg, "updated_count": updated_variants, "unmatched_count": len(unmatched_barcodes)})
 
         except Exception as e:
             return Response({"error": f"Excel dosyası okunamadı: {str(e)}"}, status=500)
+
+
+class LivePerformanceView(APIView):
+    """
+    GET /api/live-performance/
+    Canlı Performans sayfası için tek endpoint.
+    Bugünün (veya filtre aralığının) sipariş kârlılığını, saatlik performansı,
+    ürün heatmap'ini ve akıllı önerileri döndürür.
+    Tüm finansal hesaplamalar backend'de Decimal ile yapılır.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from core.models import UserProfile, Organization, ReturnClaim
+        from core.services.profit_calculator import ProfitCalculator
+        from datetime import datetime as dt_cls, time as dt_time, timedelta
+        from django.db.models.functions import TruncHour
+        from django.db.models import Sum as DjSum, Count
+        from collections import defaultdict
+        from rest_framework.pagination import PageNumberPagination
+
+        user = request.user
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        org = profile.organization
+        if not org:
+            org, _ = Organization.objects.get_or_create(name=f"{user.username} Organizasyonu")
+            profile.organization = org
+            profile.save()
+
+        # ── Date range (default: today) ──
+        min_date_str = request.query_params.get("min_date")
+        max_date_str = request.query_params.get("max_date")
+
+        import zoneinfo
+        tz_istanbul = zoneinfo.ZoneInfo("Europe/Istanbul")
+
+        if min_date_str and max_date_str:
+            try:
+                min_date = dt_cls.strptime(min_date_str, "%Y-%m-%d").replace(tzinfo=tz_istanbul)
+                max_date = dt_cls.combine(
+                    dt_cls.strptime(max_date_str, "%Y-%m-%d").date(), dt_time.max
+                ).replace(tzinfo=tz_istanbul)
+            except ValueError:
+                min_date = dt_cls.combine(timezone.localtime(timezone.now(), tz_istanbul).date(), dt_time.min).replace(tzinfo=tz_istanbul)
+                max_date = dt_cls.combine(timezone.localtime(timezone.now(), tz_istanbul).date(), dt_time.max).replace(tzinfo=tz_istanbul)
+        else:
+            today = timezone.localtime(timezone.now(), tz_istanbul).date()
+            min_date = dt_cls.combine(today, dt_time.min).replace(tzinfo=tz_istanbul)
+            max_date = dt_cls.combine(today, dt_time.max).replace(tzinfo=tz_istanbul)
+
+        # ── Base queryset ──
+        orders_qs = Order.objects.filter(
+            organization=org,
+            order_date__gte=min_date,
+            order_date__lte=max_date,
+        ).exclude(
+            status__in=["Cancelled", "Returned", "UnSupplied"]
+        ).prefetch_related(
+            'items__product_variant__product',
+            'items__transactions'
+        ).select_related('marketplace_account').order_by('-order_date')
+
+        # ── Advanced Filters ──
+        product_filter = request.query_params.get("product", "").strip()
+        category_filter = request.query_params.get("category", "").strip()
+
+        if product_filter:
+            orders_qs = orders_qs.filter(
+                items__product_variant__product__title__icontains=product_filter
+            ).distinct()
+
+        if category_filter:
+            orders_qs = orders_qs.filter(
+                items__product_variant__product__category_name__icontains=category_filter
+            ).distinct()
+
+        # ── Compute per-order profits ──
+        all_order_rows = []
+        product_agg = defaultdict(lambda: {
+            "total_sales": 0, "total_revenue": Decimal("0"), "total_profit": Decimal("0"),
+            "product_name": "", "return_rate": Decimal("0"), "category": ""
+        })
+
+        # Hourly aggregation buckets
+        hourly_data = defaultdict(lambda: {"revenue": Decimal("0"), "profit": Decimal("0"), "order_count": 0})
+
+        total_revenue = Decimal("0")
+        total_profit = Decimal("0")
+        total_commission = Decimal("0")
+        total_cargo = Decimal("0")
+        total_service_fee = Decimal("0")
+        order_count = 0
+
+        for order in orders_qs:
+            calc = ProfitCalculator.calculate_for_order(order)
+            order_profit = calc["net_profit"]
+            order_sale = calc["total_sale"]
+            order_commission = calc["commission"]
+            order_cargo = calc["cargo"]
+            order_service = calc["service_fee"]
+            profit_margin = calc["profit_margin"]
+
+            total_revenue += order_sale
+            total_profit += order_profit
+            total_commission += order_commission
+            total_cargo += order_cargo
+            total_service_fee += order_service
+            order_count += 1
+
+            # Determine main product name from first item
+            product_name = "Bilinmeyen Ürün"
+            product_cost = calc["product_cost"]
+            return_rate = Decimal("0")
+            category_name = ""
+
+            first_item = order.items.all()[:1]
+            if first_item:
+                fi = first_item[0]
+                if fi.product_variant and fi.product_variant.product:
+                    product_name = fi.product_variant.product.title
+                    return_rate = fi.product_variant.product.return_rate or Decimal("0")
+                    category_name = fi.product_variant.product.category_name or ""
+
+            # Return risk based on product return_rate
+            if return_rate >= Decimal("20"):
+                return_risk = "high"
+            elif return_rate >= Decimal("10"):
+                return_risk = "medium"
+            else:
+                return_risk = "low"
+
+            kd = calc.get("kdv_detail", {})
+            net_kdv = kd.get("net_kdv", Decimal("0"))
+
+            order_row = {
+                "order_number": order.order_number,
+                "order_date": order.order_date.isoformat(),
+                "product_name": product_name,
+                "sale_price": str(order_sale),
+                "cost": str(product_cost),
+                "commission": str(order_commission),
+                "cargo_cost": str(order_cargo),
+                "tax": str(net_kdv),
+                "net_profit": str(order_profit),
+                "profit_margin": str(profit_margin),
+                "return_risk": return_risk,
+                "status": order.status,
+                "cost_breakdown": {
+                    "commission": str(order_commission),
+                    "cargo": str(order_cargo),
+                    "tax": str(net_kdv),
+                    "service_fee": str(order_service),
+                    "withholding": str(calc["withholding"]),
+                    "product_cost": str(product_cost),
+                }
+            }
+            all_order_rows.append(order_row)
+
+            # Aggregate for product heatmap
+            pk = product_name
+            product_agg[pk]["product_name"] = product_name
+            product_agg[pk]["total_sales"] += 1
+            product_agg[pk]["total_revenue"] += order_sale
+            product_agg[pk]["total_profit"] += order_profit
+            product_agg[pk]["return_rate"] = return_rate
+            product_agg[pk]["category"] = category_name
+
+            # Hourly aggregation
+            order_hour = timezone.localtime(order.order_date, tz_istanbul)
+            hour_key = order_hour.strftime("%H:00")
+            hourly_data[hour_key]["revenue"] += order_sale
+            hourly_data[hour_key]["profit"] += order_profit
+            hourly_data[hour_key]["order_count"] += 1
+
+        # ── Post-filter: profit range & loss-only ──
+        min_profit = request.query_params.get("min_profit")
+        max_profit = request.query_params.get("max_profit")
+        loss_only = request.query_params.get("loss_only", "").lower() == "true"
+
+        filtered_rows = all_order_rows
+        if loss_only:
+            filtered_rows = [r for r in filtered_rows if Decimal(r["net_profit"]) < Decimal("0")]
+        if min_profit:
+            try:
+                mp = Decimal(min_profit)
+                filtered_rows = [r for r in filtered_rows if Decimal(r["net_profit"]) >= mp]
+            except Exception:
+                pass
+        if max_profit:
+            try:
+                mp = Decimal(max_profit)
+                filtered_rows = [r for r in filtered_rows if Decimal(r["net_profit"]) <= mp]
+            except Exception:
+                pass
+
+        # ── Sort support ──
+        sort_by = request.query_params.get("sort_by", "order_date")
+        sort_dir = request.query_params.get("sort_dir", "desc")
+        reverse = sort_dir == "desc"
+
+        sortable_decimal_fields = ["sale_price", "cost", "commission", "cargo_cost", "tax", "net_profit", "profit_margin"]
+        if sort_by in sortable_decimal_fields:
+            filtered_rows.sort(key=lambda r: Decimal(r.get(sort_by, "0")), reverse=reverse)
+        elif sort_by == "order_date":
+            filtered_rows.sort(key=lambda r: r.get("order_date", ""), reverse=reverse)
+        elif sort_by == "product_name":
+            filtered_rows.sort(key=lambda r: r.get("product_name", "").lower(), reverse=reverse)
+
+        # ── Paginate orders ──
+        total_count = len(filtered_rows)
+        page = int(request.query_params.get("page", 1))
+        page_size = int(request.query_params.get("page_size", 50))
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_rows = filtered_rows[start_idx:end_idx]
+
+        # ── KPIs ──
+        profit_margin_pct = Decimal("0")
+        if total_revenue > Decimal("0"):
+            profit_margin_pct = (total_profit / total_revenue * Decimal("100")).quantize(Decimal("0.01"))
+
+        net_cash_inflow = total_revenue - total_commission - total_cargo - total_service_fee
+        avg_order_profit = (total_profit / Decimal(str(order_count))).quantize(Decimal("0.01")) if order_count > 0 else Decimal("0")
+
+        kpis = {
+            "total_revenue": str(total_revenue.quantize(Decimal("0.01"))),
+            "net_profit": str(total_profit.quantize(Decimal("0.01"))),
+            "profit_margin": str(profit_margin_pct),
+            "net_cash_inflow": str(net_cash_inflow.quantize(Decimal("0.01"))),
+            "order_count": order_count,
+            "avg_order_profit": str(avg_order_profit),
+        }
+
+        # ── Hourly performance (fill missing hours) ──
+        hourly_list = []
+        for h in range(24):
+            hk = f"{h:02d}:00"
+            entry = hourly_data.get(hk, {"revenue": Decimal("0"), "profit": Decimal("0"), "order_count": 0})
+            hourly_list.append({
+                "hour": hk,
+                "revenue": str(entry["revenue"].quantize(Decimal("0.01"))),
+                "profit": str(entry["profit"].quantize(Decimal("0.01"))),
+                "order_count": entry["order_count"],
+            })
+
+        # ── Product heatmap (sorted by profit desc) ──
+        heatmap = []
+        for pk, agg in product_agg.items():
+            margin = Decimal("0")
+            if agg["total_revenue"] > Decimal("0"):
+                margin = (agg["total_profit"] / agg["total_revenue"] * Decimal("100")).quantize(Decimal("0.01"))
+            heatmap.append({
+                "product_name": agg["product_name"],
+                "category": agg["category"],
+                "total_sales": agg["total_sales"],
+                "total_revenue": str(agg["total_revenue"].quantize(Decimal("0.01"))),
+                "total_profit": str(agg["total_profit"].quantize(Decimal("0.01"))),
+                "margin": str(margin),
+                "return_rate": str(agg["return_rate"]),
+            })
+        heatmap.sort(key=lambda x: Decimal(x["total_profit"]), reverse=True)
+
+        # ── Smart Insights (rule-based) ──
+        insights = []
+        for pk, agg in product_agg.items():
+            margin = Decimal("0")
+            if agg["total_revenue"] > Decimal("0"):
+                margin = (agg["total_profit"] / agg["total_revenue"] * Decimal("100")).quantize(Decimal("0.01"))
+
+            # Negative profit warning
+            if agg["total_profit"] < Decimal("0"):
+                insights.append({
+                    "type": "danger",
+                    "title": "Zarar Eden Ürün",
+                    "message": f"\"{agg['product_name']}\" bugün ₺{abs(agg['total_profit']).quantize(Decimal('0.01'))} zarar etti. Fiyatlandırma ve maliyetleri gözden geçirin.",
+                    "product_name": agg["product_name"],
+                })
+            # High sales but low margin
+            elif agg["total_sales"] >= 3 and margin < Decimal("10") and margin >= Decimal("0"):
+                insights.append({
+                    "type": "suggestion",
+                    "title": "Fiyat Artışı Önerisi",
+                    "message": f"\"{agg['product_name']}\" {agg['total_sales']} satış yaptı ama kâr marjı sadece %{margin}. Fiyat artışı düşünebilirsiniz.",
+                    "product_name": agg["product_name"],
+                })
+            # High return rate
+            if agg["return_rate"] >= Decimal("15"):
+                insights.append({
+                    "type": "warning",
+                    "title": "Yüksek İade Riski",
+                    "message": f"\"{agg['product_name']}\" ürününün iade oranı %{agg['return_rate']}. Ürün kalitesi veya açıklamalarını kontrol edin.",
+                    "product_name": agg["product_name"],
+                })
+
+        return Response({
+            "kpis": kpis,
+            "orders": paginated_rows,
+            "hourly_performance": hourly_list,
+            "product_heatmap": heatmap,
+            "insights": insights,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_count": total_count,
+            }
+        })

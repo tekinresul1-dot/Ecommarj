@@ -1,12 +1,16 @@
 from django.urls import path
-from .auth_views import RegisterView, LoginView, MeView, SendOTPView, VerifyOTPView
+from .auth_views import (
+    RegisterView, RegisterVerifyView, RegisterResendOTPView,
+    LoginView, MeView, SendOTPView, VerifyOTPView, UpdateOnboardingStatusView
+)
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     DashboardOverviewView, MockReportsView, TriggerSyncView,
     ProductListView, OrderListView, ProductAnalysisView,
     TrendyolTestConnectionView, TrendyolSaveCredentialsView,
     CategoryAnalysisView, ReturnAnalysisView, AdsAnalysisView,
-    ProductExcelExportView, ProductExcelImportView,
+    ProductExcelExportView, ProductExcelImportView, ProductStockSyncView,
+    OrderExcelExportView, LivePerformanceView,
 )
 from .sync_views import (
     TrendyolFullSyncView, TrendyolIncrementalSyncView,
@@ -17,10 +21,13 @@ from .sync_views import (
 urlpatterns = [
     # Auth
     path("auth/register/", RegisterView.as_view(), name="auth-register"),
+    path("auth/register/verify/", RegisterVerifyView.as_view(), name="auth-register-verify"),
+    path("auth/register/resend-otp/", RegisterResendOTPView.as_view(), name="auth-register-resend"),
     path("auth/login/", LoginView.as_view(), name="auth-login"),
     path("auth/send-otp/", SendOTPView.as_view(), name="auth-send-otp"),
     path("auth/verify-otp/", VerifyOTPView.as_view(), name="auth-verify-otp"),
     path("auth/me/", MeView.as_view(), name="auth-me"),
+    path("auth/onboarding/status/", UpdateOnboardingStatusView.as_view(), name="auth-onboarding-status"),
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="auth-token-refresh"),
 
     # Dashboard & Reports
@@ -43,7 +50,12 @@ urlpatterns = [
     path("products/", ProductListView.as_view(), name="product-list"),
     path("products/export-excel/", ProductExcelExportView.as_view(), name="product-export-excel"),
     path("products/import-excel/", ProductExcelImportView.as_view(), name="product-import-excel"),
+    path("products/sync-stock/", ProductStockSyncView.as_view(), name="product-sync-stock"),
     path("orders/", OrderListView.as_view(), name="order-list"),
+    path("orders/export-excel/", OrderExcelExportView.as_view(), name="order-export-excel"),
+
+    # Live Performance
+    path("live-performance/", LivePerformanceView.as_view(), name="live-performance"),
     
     # Reports — specific endpoints first, then catch-all mock
     path("reports/product-analysis/", ProductAnalysisView.as_view(), name="product-analysis"),

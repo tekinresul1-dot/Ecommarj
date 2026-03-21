@@ -20,9 +20,15 @@ export default function RegisterPage() {
     const [errors, setErrors] = useState<Record<string, string>>({});
     const [toast, setToast] = useState("");
     const [toastType, setToastType] = useState<"success" | "error">("success");
+    const [errorDetail, setErrorDetail] = useState<{
+        code?: string;
+        message?: string;
+        nextAction?: string;
+    } | null>(null);
 
     function update(field: string, value: string | boolean) {
         setForm((p) => ({ ...p, [field]: value }));
+        if (errorDetail) setErrorDetail(null);
     }
 
     function validate() {
@@ -46,32 +52,52 @@ export default function RegisterPage() {
         setTimeout(() => setToast(""), 4000);
     }
 
+    async function handleResendOTP() {
+        if (!form.email) return;
+        setIsLoading(true);
+        try {
+            await api.post("/auth/register/resend-otp/", { email: form.email });
+            showToast("Doğrulama kodu tekrar gönderildi.", "success");
+            setTimeout(() => router.push(`/dogrulama?email=${encodeURIComponent(form.email)}`), 1000);
+        } catch (err: any) {
+            showToast(err.message || "Kod gönderilemedi.", "error");
+        } finally {
+            setIsLoading(false);
+        }
+    }
+
     async function handleSubmit(ev: FormEvent) {
         ev.preventDefault();
         const v = validate();
         setErrors(v);
+        setErrorDetail(null);
         if (Object.keys(v).length) return;
 
         setIsLoading(true);
         try {
-            const data = await api.post("/auth/register/", {
-                name: form.name,
+            await api.post("/auth/register/", {
+                full_name: form.name,
                 email: form.email,
                 password: form.password,
                 password_confirm: form.passwordConfirm,
                 phone: form.phone,
-                company: form.company,
+                company_name: form.company,
+                kvkk_terms_accepted: form.kvkk,
             });
 
-            // Save tokens
-            localStorage.setItem("access_token", data.tokens.access);
-            localStorage.setItem("refresh_token", data.tokens.refresh);
-            localStorage.setItem("user", JSON.stringify(data.user));
-
-            showToast("Hesap başarıyla oluşturuldu! Yönlendiriliyorsunuz...", "success");
-            setTimeout(() => router.push("/dashboard"), 1500);
+            showToast("Hesap oluşturuldu! Lütfen e-postanıza gönderilen kodu doğrulayın.", "success");
+            setTimeout(() => router.push(`/dogrulama?email=${encodeURIComponent(form.email)}`), 1500);
         } catch (error: any) {
-            showToast(error.message || "Sunucuya bağlanılamadı. Lütfen tekrar deneyin.", "error");
+            const data = error.data;
+            if (data && data.error_code) {
+                setErrorDetail({
+                    code: data.error_code,
+                    message: data.message,
+                    nextAction: data.next_action,
+                });
+            } else {
+                showToast(error.message || "Sunucuya bağlanılamadı. Lütfen tekrar deneyin.", "error");
+            }
         } finally {
             setIsLoading(false);
         }
@@ -264,6 +290,51 @@ export default function RegisterPage() {
                             </label>
                             {errors.kvkk && <p className="mt-1 text-xs text-rose-400">{errors.kvkk}</p>}
                         </div>
+
+                        {/* Detailed Error Suggestion */}
+                        {errorDetail && (
+                            <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-400/20 animate-in fade-in slide-in-from-top-2 duration-300">
+                                <p className="text-sm text-rose-200 mb-3 leading-relaxed">
+                                    {errorDetail.message}
+                                </p>
+                                <div className="flex flex-wrap gap-3">
+                                    {errorDetail.nextAction === "login" && (
+                                        <>
+                                            <Link
+                                                href="/giris"
+                                                className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold transition-colors"
+                                            >
+                                                Giriş Yap
+                                            </Link>
+                                            <Link
+                                                href="/sifre-sifirla"
+                                                className="px-4 py-2 rounded-lg border border-white/10 hover:border-white/20 text-white/70 hover:text-white text-xs font-medium transition-all"
+                                            >
+                                                Şifremi Unuttum
+                                            </Link>
+                                        </>
+                                    )}
+                                    {errorDetail.nextAction === "verify_or_resend" && (
+                                        <>
+                                            <button
+                                                type="button"
+                                                onClick={handleResendOTP}
+                                                disabled={isLoading}
+                                                className="px-4 py-2 rounded-lg bg-accent-500/20 hover:bg-accent-500/30 text-accent-400 text-xs font-semibold transition-colors disabled:opacity-50"
+                                            >
+                                                Doğrulama Kodunu Tekrar Gönder
+                                            </button>
+                                            <Link
+                                                href={`/dogrulama?email=${encodeURIComponent(form.email)}`}
+                                                className="px-4 py-2 rounded-lg border border-white/10 hover:border-white/20 text-white/70 hover:text-white text-xs font-medium transition-all"
+                                            >
+                                                Doğrulama Sayfasına Git
+                                            </Link>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        )}
 
                         {/* Submit */}
                         <button

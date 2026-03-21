@@ -13,23 +13,26 @@ export default function DashboardLayout({
     children: React.ReactNode;
 }) {
     const [mobileNavOpen, setMobileNavOpen] = useState(false);
-    const [needsOnboarding, setNeedsOnboarding] = useState<boolean>(false);
+    const [onboardingStatus, setOnboardingStatus] = useState<string | null>(null);
     const [checking, setChecking] = useState(true);
 
     useEffect(() => {
-        async function checkCreds() {
+        async function checkOnboarding() {
             try {
-                const res = await api.get("/integrations/trendyol/save-credentials/");
-                if (!res.api_key) {
-                    setNeedsOnboarding(true);
-                }
+                // Get fresh user data to check onboarding status
+                const user = await api.get("/auth/me/");
+                setOnboardingStatus(user.onboarding_status || "WELCOME");
+                
+                // Update localStorage with fresh data
+                localStorage.setItem("user", JSON.stringify(user));
             } catch (error) {
-                console.error("Failed to check credentials", error);
+                console.error("Failed to check onboarding status", error);
+                // If it fails, we might be unauthenticated, which is handled elsewhere or via 401
             } finally {
                 setChecking(false);
             }
         }
-        checkCreds();
+        checkOnboarding();
     }, []);
 
     if (checking) {
@@ -42,8 +45,11 @@ export default function DashboardLayout({
 
     return (
         <div className="min-h-screen bg-[#070B14] selection:bg-accent-500/30 font-sans">
-            {needsOnboarding && (
-                <OnboardingWizard onComplete={() => setNeedsOnboarding(false)} />
+            {onboardingStatus && onboardingStatus !== "COMPLETED" && (
+                <OnboardingWizard 
+                    initialStatus={onboardingStatus}
+                    onComplete={() => setOnboardingStatus("COMPLETED")} 
+                />
             )}
 
             <Sidebar mobileNavOpen={mobileNavOpen} setMobileNavOpen={setMobileNavOpen} />

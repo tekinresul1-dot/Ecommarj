@@ -199,6 +199,55 @@ class TrendyolAdapter:
             self._handle_api_error(e, "ürünleri çekme")
 
     # ------------------------------------------------------------------
+    # SELLER INVOICE SETTLEMENTS — Per-order cargo/commission/service from CHE API
+    # ------------------------------------------------------------------
+    def fetch_seller_invoices_settlement(self, start_date_ms: int = None, end_date_ms: int = None) -> List[Dict[Any, Any]]:
+        """
+        Sipariş bazlı gerçek kargo/komisyon/hizmet tutarlarını çeker.
+        Önce TGO (CHE) API'yi dener, başarısız olursa ana API'yi dener.
+        Her kayıtta: orderNumber/shipmentPackageId, cargoAmount, commissionAmount, serviceFee
+        """
+        urls_to_try = [
+            (f"{self.TGO_BASE_URL}/finance/che/sellers/{self.seller_id}/seller-invoices/settlement", "SellerInvoiceSettlement-TGO"),
+            (f"{self.BASE_URL}/finance/sellers/{self.seller_id}/seller-invoices/settlement", "SellerInvoiceSettlement"),
+        ]
+        params = {"size": 200}
+        if start_date_ms:
+            params["startDate"] = start_date_ms
+        if end_date_ms:
+            params["endDate"] = end_date_ms
+
+        for url, op_name in urls_to_try:
+            all_content = []
+            page = 0
+            try:
+                while page < 10:
+                    params["page"] = page
+                    response = self._make_request(url, params, operation=op_name)
+                    if response.status_code in (404, 556, 503):
+                        logger.warning(f"[Trendyol {op_name}] Unavailable ({response.status_code}), trying next URL.")
+                        break
+                    response.raise_for_status()
+                    data = response.json()
+                    content = data.get("content", [])
+                    if not content:
+                        break
+                    all_content.extend(content)
+                    total_pages = data.get("totalPages", 1)
+                    if page >= total_pages - 1:
+                        break
+                    page += 1
+
+                if all_content:
+                    logger.info(f"[Trendyol {op_name}] Fetched {len(all_content)} settlement records.")
+                    return all_content
+            except requests.RequestException as e:
+                logger.warning(f"[Trendyol {op_name}] Request error: {e}")
+
+        logger.warning("[Trendyol SellerInvoiceSettlement] All endpoints failed or returned no data.")
+        return []
+
+    # ------------------------------------------------------------------
     # SETTLEMENTS — Financial data
     # ------------------------------------------------------------------
     def fetch_financials(self, start_date_ms: int = None, end_date_ms: int = None) -> List[Dict[Any, Any]]:
@@ -279,36 +328,40 @@ class TrendyolAdapter:
             return []
 
     def fetch_cargo_invoice_items(self, invoice_serial_number: str) -> List[Dict[Any, Any]]:
-        """Belirli bir Kargo Faturasının (DeductionInvoices) kalemlerini (items) çeker."""
-        # URL structure: /finance/che/sellers/{sellerId}/cargo-invoice/{invoiceSerialNumber}/items
-        url = f"{self.TGO_BASE_URL}/finance/che/sellers/{self.seller_id}/cargo-invoice/{invoice_serial_number}/items"
+        """Belirli bir Kargo Faturasının kalemlerini çeker. apigw → tgoapis sırasıyla dener."""
+        urls_to_try = [
+            f"{self.BASE_URL}/finance/che/sellers/{self.seller_id}/cargo-invoice/{invoice_serial_number}/items",
+            f"{self.TGO_BASE_URL}/finance/che/sellers/{self.seller_id}/cargo-invoice/{invoice_serial_number}/items",
+        ]
         params = {"size": 500}
-        
-        all_content = []
-        page = 0
-        try:
-            while page < 5:
-                params["page"] = page
-                response = self._make_request(url, params, operation=f"CargoInvoiceItems - {invoice_serial_number}")
-                
-                if response.status_code == 556:
-                    logger.warning("[Trendyol CargoInvoiceItems] Service unavailable (556). Skipping.")
-                    return []
-                
-                response.raise_for_status()
-                data = response.json()
-                content = data.get("content", [])
 
-                if not content:
-                    break
+        for url in urls_to_try:
+            all_content = []
+            page = 0
+            try:
+                while page < 10:
+                    params["page"] = page
+                    response = self._make_request(url, params, operation=f"CargoInvoiceItems-{invoice_serial_number}")
+                    if response.status_code in (404, 502, 503, 556):
+                        logger.warning(f"[CargoInvoiceItems] {url} returned {response.status_code}, trying next.")
+                        break
+                    response.raise_for_status()
+                    data = response.json()
+                    content = data.get("content", data if isinstance(data, list) else [])
+                    if not content:
+                        break
+                    all_content.extend(content)
+                    total_pages = data.get("totalPages", 1) if isinstance(data, dict) else 1
+                    if page >= total_pages - 1:
+                        break
+                    page += 1
 
-                all_content.extend(content)
-                page += 1
-                
-            logger.info(f"[Trendyol CargoInvoiceItems] Fetched {len(all_content)} cargo items for invoice {invoice_serial_number}")
-            return all_content
+                if all_content:
+                    logger.info(f"[CargoInvoiceItems] {invoice_serial_number}: {len(all_content)} items from {url}")
+                    return all_content
+            except requests.RequestException as e:
+                logger.warning(f"[CargoInvoiceItems] {url} error: {e}")
 
-        except requests.RequestException as e:
-            logger.warning(f"Trendyol CargoInvoiceItems fetch error for {invoice_serial_number}: {e}")
-            return []
+        logger.warning(f"[CargoInvoiceItems] All URLs failed for {invoice_serial_number}")
+        return []
 

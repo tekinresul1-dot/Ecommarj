@@ -93,13 +93,35 @@ function handleSessionExpired(): void {
 function parseErrorMsg(errorData: any, statusText: string, status: number): string {
     if (!errorData) return `API Hatası (${status}): ${statusText}`;
     if (typeof errorData === 'string') return errorData;
-    if (errorData.message) return String(errorData.message);
-    if (errorData.error) return String(errorData.error);
-    if (errorData.detail) return String(errorData.detail);
-    if (typeof errorData === 'object') {
-        const firstVal = Object.values(errorData)[0];
-        if (firstVal && typeof firstVal === 'string') return firstVal;
+    
+    // Handle DRF style {"errors": {...}}
+    const target = errorData.errors || errorData;
+
+    if (target.message) return String(target.message);
+    if (target.error) return String(target.error);
+    if (target.detail) return String(target.detail);
+    
+    if (typeof target === 'object') {
+        // Handle field-specific errors: {"email": ["Already exists"], "password": [...]}
+        const values = Object.values(target);
+        if (values.length > 0) {
+            const firstVal: any = values[0];
+            if (Array.isArray(firstVal)) {
+                return String(firstVal[0]);
+            }
+            if (typeof firstVal === 'string') {
+                return firstVal;
+            }
+            if (typeof firstVal === 'object' && firstVal !== null) {
+                // Nested object (like errors: { email: [...] })
+                const nestedValues = Object.values(firstVal);
+                if (nestedValues.length > 0 && Array.isArray(nestedValues[0])) {
+                    return String(nestedValues[0][0]);
+                }
+            }
+        }
     }
+    
     return `API Hatası (${status}): ${statusText}`;
 }
 
@@ -169,7 +191,10 @@ export const api = {
                 throw new Error(`Sunucu hatası (${res.status}): ${errorText.substring(0, 150)}`);
             }
             console.error(`[api.post] ${cleanEndpoint} → ${res.status}:`, errorData);
-            throw new Error(parseErrorMsg(errorData, res.statusText, res.status));
+            const error = new Error(parseErrorMsg(errorData, res.statusText, res.status)) as any;
+            error.data = errorData;
+            error.status = res.status;
+            throw error;
         }
 
         const text = await res.text();

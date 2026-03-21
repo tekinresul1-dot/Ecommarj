@@ -7,21 +7,46 @@ from rest_framework import serializers
 
 
 class RegisterSerializer(serializers.Serializer):
-    """Kayıt formu serializer'ı."""
+    """Kayıt formu serializer'ı - Üretim odaklı güncellenmiş alanlar."""
 
-    name = serializers.CharField(max_length=150)
+    full_name = serializers.CharField(max_length=150)
     email = serializers.EmailField()
     password = serializers.CharField(min_length=8, write_only=True)
     password_confirm = serializers.CharField(min_length=8, write_only=True)
-    phone = serializers.CharField(max_length=20, required=False, allow_blank=True, default="")
-    company = serializers.CharField(max_length=200, required=False, allow_blank=True, default="")
+    phone = serializers.CharField(max_length=20, required=False, allow_blank=True, default="", allow_null=True)
+    company_name = serializers.CharField(max_length=200, required=False, allow_blank=True, default="", allow_null=True)
+    kvkk_terms_accepted = serializers.BooleanField()
+
+    def validate_kvkk_terms_accepted(self, value):
+        if not value:
+            raise serializers.ValidationError("Koşulları kabul etmelisiniz.")
+        return value
 
     def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("Bu e-posta adresi zaten kayıtlı.")
-        if User.objects.filter(username=value).exists():
-            raise serializers.ValidationError("Bu e-posta adresi zaten kayıtlı.")
-        return value.lower()
+        from django.contrib.auth.models import User
+        email = value.lower().strip()
+        
+        # Check for active (verified) user
+        if User.objects.filter(email=email, is_active=True).exists():
+            raise serializers.ValidationError({
+                "email": {
+                    "code": "EMAIL_ALREADY_EXISTS",
+                    "message": "Bu e-posta adresi ile zaten aktif bir hesap bulunmaktadır.",
+                    "next_action": "login"
+                }
+            })
+            
+        # Check for inactive (unverified) user
+        if User.objects.filter(email=email, is_active=False).exists():
+            raise serializers.ValidationError({
+                "email": {
+                    "code": "EMAIL_EXISTS_UNVERIFIED",
+                    "message": "Bu e-posta adresi kayıtlı ancak henüz doğrulanmamış.",
+                    "next_action": "verify_or_resend"
+                }
+            })
+            
+        return email
 
     def validate(self, data):
         if data["password"] != data["password_confirm"]:
@@ -29,29 +54,51 @@ class RegisterSerializer(serializers.Serializer):
         return data
 
     def create(self, validated_data):
-        name_parts = validated_data["name"].strip().split(" ", 1)
+        from django.contrib.auth.models import User
+        from core.models import UserProfile, Organization
+        
+        email = validated_data["email"]
+        full_name = validated_data["full_name"].strip()
+        name_parts = full_name.split(" ", 1)
         first_name = name_parts[0]
         last_name = name_parts[1] if len(name_parts) > 1 else ""
+        
+        user = User.objects.filter(email=email).first()
+        if user:
+            # Update existing inactive user
+            user.set_password(validated_data["password"])
+            user.first_name = first_name
+            user.last_name = last_name
+            user.save()
+        else:
+            # Create new user
+            user = User.objects.create_user(
+                username=email,
+                email=email,
+                password=validated_data["password"],
+                first_name=first_name,
+                last_name=last_name,
+                is_active=False,
+            )
 
-        user = User.objects.create_user(
-            username=validated_data["email"],
-            email=validated_data["email"],
-            password=validated_data["password"],
-            first_name=first_name,
-            last_name=last_name,
-        )
+        # Handle Organization and Profile
+        company_name = validated_data.get("company_name") or f"{first_name} {last_name} Firması".strip()
+        
+        profile = getattr(user, "profile", None)
+        if profile and profile.organization:
+            org = profile.organization
+            org.name = company_name
+            org.save()
+        else:
+            org = Organization.objects.create(name=company_name)
 
-        from core.models import UserProfile, Organization
-
-        # Create tenant (Organization)
-        company_name = validated_data.get("company") or f"{first_name} {last_name} Firması".strip()
-        org = Organization.objects.create(name=company_name)
-
-        UserProfile.objects.create(
+        UserProfile.objects.update_or_create(
             user=user,
-            organization=org,
-            phone=validated_data.get("phone", ""),
-            company=validated_data.get("company", ""),
+            defaults={
+                "organization": org,
+                "phone": validated_data.get("phone", ""),
+                "company": validated_data.get("company_name", ""),
+            }
         )
 
         return user
@@ -70,10 +117,11 @@ class UserSerializer(serializers.ModelSerializer):
     phone = serializers.SerializerMethodField()
     company = serializers.SerializerMethodField()
     name = serializers.SerializerMethodField()
+    onboarding_status = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "email", "name", "phone", "company", "date_joined"]
+        fields = ["id", "email", "name", "phone", "company", "onboarding_status", "date_joined"]
         read_only_fields = fields
 
     def get_name(self, obj):
@@ -86,3 +134,7 @@ class UserSerializer(serializers.ModelSerializer):
     def get_company(self, obj):
         profile = getattr(obj, "profile", None)
         return profile.company if profile else ""
+
+    def get_onboarding_status(self, obj):
+        profile = getattr(obj, "profile", None)
+        return profile.onboarding_status if profile else "WELCOME"

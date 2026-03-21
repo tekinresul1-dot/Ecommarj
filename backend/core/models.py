@@ -43,6 +43,12 @@ class Organization(TimestampedModel):
 
 class UserProfile(TimestampedModel):
     """Kullanıcı profil bilgileri — kayıt sırasında opsiyonel alanlar."""
+    class OnboardingStatus(models.TextChoices):
+        WELCOME = "WELCOME", "Karşılama"
+        MARKETPLACE_CONNECT = "MARKETPLACE_CONNECT", "Pazaryeri Bağlantısı"
+        SYNCING = "SYNCING", "Senkronizasyon"
+        COMPLETED = "COMPLETED", "Tamamlandı"
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -57,6 +63,12 @@ class UserProfile(TimestampedModel):
     )
     phone = models.CharField("Telefon", max_length=20, blank=True, default="")
     company = models.CharField("Şirket Adı", max_length=200, blank=True, default="")
+    onboarding_status = models.CharField(
+        "Onboarding Durumu",
+        max_length=50,
+        choices=OnboardingStatus.choices,
+        default=OnboardingStatus.WELCOME
+    )
 
     class Meta:
         verbose_name = "Kullanıcı Profili"
@@ -124,6 +136,8 @@ class Product(TimestampedModel):
     fast_delivery = models.BooleanField("Bugün Kargoda", default=False)
     trendyol_created_at = models.DateTimeField("Trendyol Yüklenme Tarihi", null=True, blank=True, db_index=True)
     
+    trendyol_content_id = models.CharField("Trendyol İçerik ID", max_length=100, blank=True, default="")
+    currency = models.CharField("Para Birimi", max_length=10, default="TRY")
     is_active = models.BooleanField("Aktif mi?", default=True)
 
     @property
@@ -150,8 +164,16 @@ class ProductVariant(TimestampedModel):
     cost_price = models.DecimalField("Ürün Maliyeti (KDV Dahil)", max_digits=12, decimal_places=2, default=0)
     cost_vat_rate = models.DecimalField("Maliyet KDV Oranı (%)", max_digits=5, decimal_places=2, default=0)
     
+    color = models.CharField("Renk", max_length=100, blank=True, default="")
+    size = models.CharField("Beden", max_length=100, blank=True, default="")
+    stock = models.IntegerField("Stok", default=0)
+
     # Varyanta özel desi (boşsa ürün desisini kullanırız)
     desi = models.DecimalField("Varyant Desi", max_digits=6, decimal_places=2, null=True, blank=True)
+
+    # Ekstra maliyetler
+    extra_cost_rate = models.DecimalField("Ekstra Maliyet (%)", max_digits=6, decimal_places=2, default=0)
+    extra_cost_amount = models.DecimalField("Ekstra Maliyet (TL)", max_digits=10, decimal_places=2, default=0)
 
     class Meta:
         verbose_name = "Ürün Varyantı"
@@ -196,6 +218,8 @@ class Order(TimestampedModel):
     # Kargo bilgileri
     cargo_provider_name = models.CharField("Kargo Firması", max_length=100, blank=True, default="")
     cargo_tracking_number = models.CharField("Kargo Takip No", max_length=100, blank=True, default="")
+    cargo_deci = models.DecimalField("Kargo Desi (Trendyol'dan)", max_digits=8, decimal_places=2, null=True, blank=True)
+    cargo_cost = models.DecimalField("Kargo Maliyeti (Hesaplanan)", max_digits=10, decimal_places=2, null=True, blank=True)
     
     # Sync metadata
     raw_payload_hash = models.CharField("Payload Hash", max_length=64, blank=True, default="")
@@ -329,6 +353,47 @@ class CargoPricing(TimestampedModel):
 
     def __str__(self):
         return f"{self.carrier_name} - {self.desi} Desi: {self.price_without_vat} TL"
+
+
+class CargoInvoice(TimestampedModel):
+    """
+    Trendyol Kargo Faturası API'sinden çekilen sipariş bazlı gerçek kargo tutarları.
+    /finance/che/sellers/{id}/cargo-invoice/{invoiceSerialNumber}/items endpoint'inden gelir.
+    """
+    organization        = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="cargo_invoices")
+    order_number        = models.CharField("Sipariş No", max_length=50, db_index=True)
+    invoice_serial_number = models.CharField("Fatura Seri No", max_length=100)
+    amount              = models.DecimalField("Kargo Tutarı (KDV Dahil)", max_digits=10, decimal_places=2)
+    desi                = models.DecimalField("Desi", max_digits=6, decimal_places=2, null=True, blank=True)
+    shipment_package_type = models.CharField("Gönderi Tipi", max_length=200, blank=True)
+    raw_payload         = models.JSONField("Ham Veri", default=dict, blank=True)
+
+    class Meta:
+        verbose_name = "Kargo Faturası Kalemi"
+        verbose_name_plural = "Kargo Faturası Kalemleri"
+        unique_together = ("organization", "order_number", "invoice_serial_number")
+        indexes = [models.Index(fields=["organization", "order_number"])]
+
+    def __str__(self):
+        return f"Kargo #{self.order_number} — ₺{self.amount}"
+
+
+class CarrierFlatRate(TimestampedModel):
+    """
+    Kargo firmalarının sipariş başına sabit (flat) tarifesi.
+    Trendyol tarife değiştirdiğinde buradan güncellenir — koda dokunmak gerekmez.
+    """
+    carrier_name    = models.CharField("Kargo Firması", max_length=100, unique=True)
+    rate_kdv_dahil  = models.DecimalField("Flat Rate (KDV Dahil, TL)", max_digits=10, decimal_places=2)
+    notes           = models.CharField("Not", max_length=255, blank=True, default="")
+
+    class Meta:
+        verbose_name = "Kargo Flat Tarife"
+        verbose_name_plural = "Kargo Flat Tarifeleri"
+        ordering = ["carrier_name"]
+
+    def __str__(self):
+        return f"{self.carrier_name}: ₺{self.rate_kdv_dahil}"
 
 
 class ProfitSnapshot(TimestampedModel):

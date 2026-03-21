@@ -202,7 +202,7 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 # Email — OTP gönderimi için SMTP ayarları (.env'den okunur)
 # ---------------------------------------------------------------------------
 
-EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "ecommarj_backend.email_backend.CertifiEmailBackend")
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "True").lower() in ("true", "1", "yes")
@@ -264,20 +264,26 @@ SIMPLE_JWT = {
 }
 
 
-# ---------------------------------------------------------------------------
 # Cache — OTP ve session için Redis (Celery ile aynı Redis instance)
-# ---------------------------------------------------------------------------
-
-_REDIS_BASE = os.getenv("REDIS_URL", "redis://redis:6379/0")
+_REDIS_BASE = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 # Cache için DB/1 kullan — Celery broker DB/0'dan ayrı tutmak için
 _CACHE_REDIS_URL = _REDIS_BASE.rsplit("/", 1)[0] + "/1"
 
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": _CACHE_REDIS_URL,
+# Development'ta Redis yoksa LocMem'e dön
+if DEBUG and not os.getenv("REDIS_URL"):
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "unique-snowflake",
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": _CACHE_REDIS_URL,
+        }
+    }
 
 CELERY_BROKER_URL = _REDIS_BASE
 CELERY_RESULT_BACKEND = os.getenv("REDIS_URL", "redis://localhost:6379/0")

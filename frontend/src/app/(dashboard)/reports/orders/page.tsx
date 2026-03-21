@@ -2,20 +2,21 @@
 
 import { useState, useEffect } from "react";
 import { formatCurrency, formatPercentage } from "@/lib/utils/format";
-import apiClient from "@/lib/api/client";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ChevronDown, Filter, Download, ShoppingBag, Package, AlertCircle, FileText, RefreshCw } from "lucide-react";
+import { api } from "@/lib/api";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { ChevronDown, Filter, Download, ShoppingBag, Package, AlertCircle, RefreshCw } from "lucide-react";
 import clsx from "clsx";
-
-import { TableFilter, FilterState, FilterColumn, applyTableFilter } from "@/components/dashboard/TableFilter";
+import { format, subDays } from "date-fns";
 import { DatePickerWithRange } from "@/components/dashboard/DateRangePicker";
 import { DateRange } from "react-day-picker";
-import { format, subDays } from "date-fns";
+import { TableFilter, FilterState, FilterColumn, applyTableFilter } from "@/components/dashboard/TableFilter";
 
 interface OrderBreakdown {
   product_cost: string;
+  extra_cost: string;
   commission: string;
   shipping_fee: string;
+  cargo_source: "invoice" | "transaction" | "deci_estimated" | "estimated";
   service_fee: string;
   withholding: string;
   net_kdv: string;
@@ -33,6 +34,7 @@ interface OrderItem {
   quantity: number;
   sale_price_gross: string;
   commission_rate: string;
+  commission_cost: string;
   image_url?: string;
 }
 
@@ -63,21 +65,20 @@ export default function OrderProfitabilityPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
-  // Date Range State
   const [date, setDate] = useState<DateRange | undefined>({
     from: subDays(new Date(), 30),
     to: new Date(),
   });
 
-  // Filtering State
   const [showFilter, setShowFilter] = useState(false);
   const [tableFilter, setTableFilter] = useState<FilterState | null>(null);
 
   useEffect(() => {
     handleDateFilter();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date]); // Run automatically when date changes
+  }, [date]);
 
   const fetchOrders = async (minDate?: string, maxDate?: string) => {
     setLoading(true);
@@ -86,12 +87,11 @@ export default function OrderProfitabilityPage() {
       if (minDate && maxDate) {
         url += `?min_date=${minDate}&max_date=${maxDate}`;
       }
-      const result = await apiClient.get<Order[]>(url);
-      if (result.ok && result.data) {
-        setOrders(result.data);
-      }
+      const result = await api.get(url);
+      setOrders(result.data || []);
     } catch (error) {
       console.error("Orders fetch error:", error);
+      setOrders([]);
     } finally {
       setLoading(false);
     }
@@ -102,6 +102,32 @@ export default function OrderProfitabilityPage() {
       fetchOrders(format(date.from, "yyyy-MM-dd"), format(date.to, "yyyy-MM-dd"));
     } else {
       fetchOrders();
+    }
+  };
+
+  const handleExcelExport = async () => {
+    setIsExporting(true);
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : "";
+      let url = "/api/orders/export-excel/";
+      if (date?.from && date?.to) {
+        url += `?min_date=${format(date.from, "yyyy-MM-dd")}&max_date=${format(date.to, "yyyy-MM-dd")}`;
+      }
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Export başarısız");
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = "Siparis_Karliligi.xlsx";
+      link.click();
+      URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error("Excel export error:", err);
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -129,7 +155,7 @@ export default function OrderProfitabilityPage() {
             <RefreshCw className="w-4 h-4" />
           </button>
 
-          <div className="w-px h-8 bg-white/10 mx-1 hidden sm:block"></div>
+          <div className="w-px h-8 bg-white/10 mx-1 hidden sm:block" />
 
           <button
             onClick={() => setShowFilter(!showFilter)}
@@ -141,11 +167,16 @@ export default function OrderProfitabilityPage() {
             )}
           >
             <Filter className="w-4 h-4" />
-            Tabloda Ara {(tableFilter) && <span className="w-2 h-2 rounded-full bg-blue-500 ml-1"></span>}
+            Tabloda Ara {tableFilter && <span className="w-2 h-2 rounded-full bg-blue-500 ml-1" />}
           </button>
-          <button className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-green-900/20 h-10">
+
+          <button
+            onClick={handleExcelExport}
+            disabled={isExporting}
+            className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-green-900/20 h-10"
+          >
             <Download className="w-4 h-4" />
-            İndir
+            {isExporting ? "İndiriliyor..." : "Excel İndir"}
           </button>
         </div>
       </div>
@@ -179,7 +210,7 @@ export default function OrderProfitabilityPage() {
                 <tr>
                   <td colSpan={7} className="px-6 py-8 text-center text-white/50">
                     <div className="flex justify-center items-center gap-3">
-                      <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                      <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                       Siparişler yükleniyor...
                     </div>
                   </td>
@@ -197,7 +228,11 @@ export default function OrderProfitabilityPage() {
                   const isLoss = profitVal < 0;
 
                   return (
-                    <tr key={order.id} className="hover:bg-white/5 transition-colors group cursor-pointer" onClick={() => setSelectedOrder(order)}>
+                    <tr
+                      key={order.id}
+                      className="hover:bg-white/5 transition-colors cursor-pointer"
+                      onClick={() => setSelectedOrder(order)}
+                    >
                       <td className="px-5 py-4 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-blue-400">{order.order_number}</span>
@@ -208,33 +243,22 @@ export default function OrderProfitabilityPage() {
                           )}
                         </div>
                       </td>
-                      <td className="px-5 py-4 whitespace-nowrap text-white/60">
-                        {order.order_date || "-"}
-                      </td>
+                      <td className="px-5 py-4 whitespace-nowrap text-white/60">{order.order_date || "-"}</td>
                       <td className="px-5 py-4 whitespace-nowrap text-right font-medium text-white/80">
                         {formatCurrency(parseFloat(order.total_gross))}
                       </td>
                       <td className="px-5 py-4 whitespace-nowrap text-right">
-                        <span className={clsx(
-                          "font-bold",
-                          isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80"
-                        )}>
+                        <span className={clsx("font-bold", isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80")}>
                           {formatCurrency(profitVal)}
                         </span>
                       </td>
                       <td className="px-5 py-4 whitespace-nowrap text-right">
-                        <span className={clsx(
-                          "font-medium",
-                          isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80"
-                        )}>
+                        <span className={clsx("font-medium", isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80")}>
                           {formatPercentage(parseFloat(order.profit_on_cost))}
                         </span>
                       </td>
                       <td className="px-5 py-4 whitespace-nowrap text-right">
-                        <span className={clsx(
-                          "font-medium",
-                          isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80"
-                        )}>
+                        <span className={clsx("font-medium", isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80")}>
                           {formatPercentage(parseFloat(order.profit_margin))}
                         </span>
                       </td>
@@ -260,13 +284,24 @@ export default function OrderProfitabilityPage() {
   );
 }
 
-function OrderDetailsModal({ order, onClose }: { order: Order | null, onClose: () => void }) {
+function OrderDetailsModal({ order, onClose }: { order: Order | null; onClose: () => void }) {
   const [kdvOpen, setKdvOpen] = useState(false);
 
   if (!order) return null;
 
   const profitVal = parseFloat(order.total_profit);
   const isProfitable = profitVal > 0;
+  const bd = order.aggregated_breakdown;
+
+  const totalGross = parseFloat(order.total_gross);
+  const shipping = parseFloat(bd.shipping_fee);
+  const netKdv = parseFloat(bd.net_kdv);
+  const productCost = parseFloat(bd.product_cost);
+  const extraCost = parseFloat(bd.extra_cost || "0");
+  const baseCost = productCost - extraCost;
+  const commission = parseFloat(bd.commission);
+  const serviceFee = parseFloat(bd.service_fee);
+  const withholding = parseFloat(bd.withholding);
 
   return (
     <Dialog open={!!order} onOpenChange={(open) => !open && onClose()}>
@@ -304,8 +339,7 @@ function OrderDetailsModal({ order, onClose }: { order: Order | null, onClose: (
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-0 max-h-[65vh] overflow-y-auto">
-
-          {/* Items Column (3/5) */}
+          {/* Sol: Ürünler (3/5) */}
           <div className="lg:col-span-3 p-6 border-r border-white/5">
             <div className="flex items-center justify-between mb-5">
               <h3 className="font-semibold text-white/90 flex items-center gap-2 text-sm">
@@ -334,35 +368,51 @@ function OrderDetailsModal({ order, onClose }: { order: Order | null, onClose: (
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
                       <span className="text-white/50">Barkod: <span className="text-orange-400 font-medium">{item.barcode}</span></span>
                       <span className="text-white/50">Adet: <span className="text-white/80 font-medium">{item.quantity}</span></span>
-                      <span className="text-white/50">Komisyon: <span className="text-purple-400 font-medium">%{parseFloat(item.commission_rate).toFixed(2)}</span></span>
+                      <span className="text-white/50">
+                        Komisyon: <span className="text-purple-400 font-medium">%{parseFloat(item.commission_rate).toFixed(2)}</span>
+                        {item.commission_cost && parseFloat(item.commission_cost) > 0 && (
+                          <span className="text-purple-300 ml-1">({formatCurrency(parseFloat(item.commission_cost))})</span>
+                        )}
+                      </span>
                     </div>
                   </div>
                   <div className="text-right flex-shrink-0">
                     <p className="text-lg font-bold text-white">{formatCurrency(parseFloat(item.sale_price_gross))}</p>
-                    <p className="text-[10px] text-white/40 mt-0.5">Satış Tutarı</p>
+                    <p className="text-[10px] text-white/40 mt-0.5">Satış Fiyatı</p>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Expenses Column (2/5) */}
-          <div className="lg:col-span-2 p-6 bg-navy-900/20">
+          {/* Sağ: Gider Kalemleri (2/5) */}
+          <div className="lg:col-span-2 p-6 bg-navy-900/20 flex flex-col">
             <h3 className="font-semibold text-white/90 flex items-center gap-2 mb-5 text-sm">
               <AlertCircle className="w-4 h-4 text-red-400" />
               Gider Kalemleri
             </h3>
 
-            <div className="space-y-2.5">
-              <ExpenseRow label="Ürün Maliyeti" amount={parseFloat(order.aggregated_breakdown.product_cost)} icon="💰" />
-              <ExpenseRow label="Komisyon Tutarı" amount={parseFloat(order.aggregated_breakdown.commission)} icon="🏷️" />
-              <ExpenseRow label="Kargo Ücreti" amount={parseFloat(order.aggregated_breakdown.shipping_fee)} icon="📦" />
-              <ExpenseRow label="Hizmet Bedeli" amount={parseFloat(order.aggregated_breakdown.service_fee)} icon="🧾" />
-              {parseFloat(order.aggregated_breakdown.withholding) > 0 && (
-                <ExpenseRow label="Stopaj Kesintisi" amount={parseFloat(order.aggregated_breakdown.withholding)} icon="📄" />
+            <div className="space-y-2.5 flex-1">
+              <ExpenseRow
+                label={
+                  bd.cargo_source === "invoice" ? "Kargo Ücreti" :
+                  bd.cargo_source === "deci_estimated" ? "Kargo Ücreti (Desi × Tarife)" :
+                  "Kargo Ücreti (Tahmini)"
+                }
+                amount={shipping}
+                icon="📦"
+              />
+              <ExpenseRow label="Ürün Maliyeti" amount={baseCost} icon="💰" />
+              {extraCost > 0 && (
+                <ExpenseRow label="Ek Ürün Maliyeti" amount={extraCost} icon="➕" />
+              )}
+              <ExpenseRow label="Komisyon Tutarı" amount={commission} icon="🏷️" />
+              <ExpenseRow label="Hizmet Bedeli" amount={serviceFee} icon="🧾" />
+              {withholding > 0 && (
+                <ExpenseRow label="Stopaj Kesintisi" amount={withholding} icon="📄" />
               )}
 
-              {/* Collapsible KDV Section */}
+              {/* KDV detay */}
               <div className="bg-navy-900 border border-white/5 rounded-xl overflow-hidden">
                 <button
                   onClick={() => setKdvOpen(!kdvOpen)}
@@ -372,36 +422,43 @@ function OrderDetailsModal({ order, onClose }: { order: Order | null, onClose: (
                     <ChevronDown className={clsx("w-4 h-4 text-white/40 transition-transform", kdvOpen && "rotate-180")} />
                     <span className="font-medium text-white/80 text-sm">Net KDV</span>
                   </div>
-                  <span className="font-bold text-red-400 text-sm">-{formatCurrency(parseFloat(order.aggregated_breakdown.net_kdv))}</span>
+                  <span className={clsx("font-bold text-sm", netKdv < 0 ? "text-red-400" : "text-green-400")}>
+                    {formatCurrency(netKdv)}
+                  </span>
                 </button>
                 {kdvOpen && (
                   <div className="px-4 pb-3 space-y-2 border-t border-white/5 bg-navy-800/30">
-                    <KdvRow label="Satış KDV" amount={order.aggregated_breakdown.satis_kdv} />
-                    <KdvRow label="Maliyet KDV" amount={order.aggregated_breakdown.alis_kdv} />
-                    <KdvRow label="Komisyon KDV" amount={order.aggregated_breakdown.komisyon_kdv} />
-                    <KdvRow label="Kargo Ücreti KDV" amount={order.aggregated_breakdown.kargo_kdv} />
-                    <KdvRow label="Hizmet Bedeli KDV" amount={order.aggregated_breakdown.hizmet_bedeli_kdv} />
+                    <KdvRow label="Satış KDV" amount={bd.satis_kdv} />
+                    <KdvRow label="Maliyet KDV" amount={`-${bd.alis_kdv}`} />
+                    <KdvRow label="Komisyon KDV" amount={`-${bd.komisyon_kdv}`} />
+                    <KdvRow label="Kargo Ücreti KDV" amount={`-${bd.kargo_kdv}`} />
+                    <KdvRow label="Hizmet Bedeli KDV" amount={`-${bd.hizmet_bedeli_kdv}`} />
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Profit Summary */}
-            <div className="mt-6 pt-4 border-t border-white/10">
-              <div className="space-y-2">
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-white/50">Toplam Ciro</span>
-                  <span className="font-semibold text-white">{formatCurrency(parseFloat(order.total_gross))}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-white/50">Net Kâr</span>
-                  <span className={clsx("font-bold text-lg", isProfitable ? "text-green-400" : "text-red-400")}>
+            {/* Net Kâr Hesabı */}
+            <div className="mt-5 pt-4 border-t border-white/10">
+              <p className="text-xs text-white/40 uppercase tracking-wider font-semibold mb-3">Net Kâr Hesabı</p>
+              <div className="space-y-1.5 text-xs font-mono">
+                <FormulaRow label="Satış Tutarı" value={totalGross} sign="+" color="text-white/80" />
+                <FormulaRow label="Kargo Ücreti" value={-shipping} sign="-" color="text-red-400/80" />
+                <FormulaRow label="Net KDV" value={Math.abs(netKdv)} sign="-" color="text-red-400/80" />
+                <FormulaRow label="Ürün Maliyeti" value={-baseCost} sign="-" color="text-red-400/80" />
+                {extraCost > 0 && <FormulaRow label="Ek Ürün Maliyeti" value={-extraCost} sign="-" color="text-red-400/80" />}
+                <FormulaRow label="Komisyon" value={-commission} sign="-" color="text-red-400/80" />
+                <FormulaRow label="Hizmet Bedeli" value={-serviceFee} sign="-" color="text-red-400/80" />
+                {withholding > 0 && <FormulaRow label="Stopaj" value={-withholding} sign="-" color="text-red-400/80" />}
+                <div className="border-t border-white/10 pt-2 mt-2 flex justify-between items-center">
+                  <span className="text-white/60 font-sans font-semibold text-sm">Net Kâr</span>
+                  <span className={clsx("font-bold text-base font-sans", isProfitable ? "text-green-400" : "text-red-400")}>
                     {formatCurrency(profitVal)}
                   </span>
                 </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-white/50">Kâr Marjı</span>
-                  <span className={clsx("font-semibold", isProfitable ? "text-green-400" : "text-red-400")}>
+                <div className="flex justify-between items-center text-white/40">
+                  <span className="font-sans">Kâr Marjı</span>
+                  <span className={clsx("font-sans font-medium", isProfitable ? "text-green-400/70" : "text-red-400/70")}>
                     {formatPercentage(parseFloat(order.profit_margin))}
                   </span>
                 </div>
@@ -431,6 +488,15 @@ function KdvRow({ label, amount }: { label: string; amount: string }) {
     <div className="flex justify-between items-center text-xs text-white/60 pt-1.5">
       <span>{label}</span>
       <span className="text-white/80 font-medium">{formatCurrency(parseFloat(amount))}</span>
+    </div>
+  );
+}
+
+function FormulaRow({ label, value, sign, color }: { label: string; value: number; sign: string; color: string }) {
+  return (
+    <div className="flex justify-between items-center">
+      <span className={clsx("text-white/50", sign === "+" ? "" : "pl-2")}>{sign} {label}</span>
+      <span className={clsx("font-medium tabular-nums", color)}>{formatCurrency(Math.abs(value))}</span>
     </div>
   );
 }

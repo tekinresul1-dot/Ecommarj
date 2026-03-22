@@ -18,7 +18,7 @@ const navigation = [
         icon: FileText,
         children: [
             { name: "Sipariş Analizi", href: "/reports/orders", icon: ShoppingBag },
-            { name: "Ürün Analizi", href: "/reports/products", icon: Package },
+            { name: "Ürün Analizi", href: "/reports/product-analysis", icon: Package },
             { name: "Kategori Analizi", href: "/reports/categories", icon: Layers },
             { name: "İade Zarar Analizi", href: "/reports/returns", icon: RotateCcw },
             { name: "Reklam Analizi", href: "/reports/ads", icon: Megaphone },

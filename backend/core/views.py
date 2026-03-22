@@ -1861,6 +1861,7 @@ class ProductAnalysisView(APIView):
             return Response({"error": "Organizasyon bulunamadı"}, status=400)
 
         tz_istanbul = timezone.get_fixed_timezone(180)
+        from datetime import datetime as dt_cls, time as dt_time, timedelta
 
         min_date_str = request.query_params.get("start_date")
         max_date_str = request.query_params.get("end_date")

@@ -83,7 +83,7 @@ async function tryRefreshToken(): Promise<string | null> {
 function handleSessionExpired(): void {
     localStorage.removeItem("access_token");
     localStorage.removeItem("refresh_token");
-    if (typeof window !== "undefined" && window.location.pathname !== "/giris") {
+                if (typeof window !== "undefined" && window.location.pathname !== "/giris") {
         if (!window.location.search.includes("session_expired")) {
             window.location.href = "/giris?session_expired=true";
         }

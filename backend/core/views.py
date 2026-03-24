@@ -1864,8 +1864,9 @@ class ProductAnalysisView(APIView):
         from datetime import datetime as dt_cls, time as dt_time, timedelta
         from collections import defaultdict
 
-        min_date_str = request.query_params.get("start_date")
-        max_date_str = request.query_params.get("end_date")
+        # Accept both min_date/max_date and start_date/end_date for compatibility
+        min_date_str = request.query_params.get("min_date") or request.query_params.get("start_date")
+        max_date_str = request.query_params.get("max_date") or request.query_params.get("end_date")
 
         if min_date_str and max_date_str:
             try:
@@ -1891,15 +1892,27 @@ class ProductAnalysisView(APIView):
             'items__transactions'
         ).select_related('marketplace_account').order_by('order_date')
 
+        # Returned orders for return cargo loss calculation
+        returned_qs = Order.objects.filter(
+            organization=org,
+            order_date__gte=min_date,
+            order_date__lte=max_date,
+            status="Returned",
+        ).prefetch_related(
+            'items__product_variant__product',
+            'items__transactions'
+        ).select_related('marketplace_account')
+
         product_agg = defaultdict(lambda: {
             "barcode": "",
-            "product_name": "",
+            "title": "",
+            "model_code": "",
             "category": "",
             "stock": 0,
-            "total_sales": 0,
+            "total_sold_quantity": 0,
             "revenue": Decimal("0"),
             "net_profit": Decimal("0"),
-            "return_loss": Decimal("0"),
+            "return_cargo_loss": Decimal("0"),
             "commission": Decimal("0"),
             "cargo": Decimal("0"),
             "tax": Decimal("0"),
@@ -1918,70 +1931,91 @@ class ProductAnalysisView(APIView):
             fi = order.items.first()
             if not fi or not fi.product_variant or not fi.product_variant.product:
                 continue
-                
+
             p = fi.product_variant.product
+            v = fi.product_variant
             pk = p.barcode or p.marketplace_sku or p.title
 
             agg = product_agg[pk]
             if not agg["barcode"]:
                 agg["barcode"] = pk
-                agg["product_name"] = p.title
+                agg["title"] = p.title
+                agg["model_code"] = v.marketplace_sku or p.marketplace_sku or ""
                 agg["category"] = p.category_name
                 agg["stock"] = p.current_stock
                 agg["return_rate"] = p.return_rate or Decimal("0")
 
-            agg["total_sales"] += 1
+            agg["total_sold_quantity"] += 1
             agg["revenue"] += order_sale
             agg["net_profit"] += order_profit
-            
+
             agg["commission"] += calc["commission"]
             agg["cargo"] += calc["cargo"]
             agg["service_fee"] += calc["service_fee"]
             agg["tax"] += calc.get("kdv_detail", {}).get("net_kdv", Decimal("0"))
             agg["cost"] += calc["product_cost"] + calc.get("extra_product_cost", Decimal("0"))
-            agg["return_loss"] += calc.get("breakdown", {}).get("RETURN_LOSS", Decimal("0"))
-            
+
             agg["trend"][order_date_str]["revenue"] += order_sale
             agg["trend"][order_date_str]["profit"] += order_profit
 
-        max_sales = max([a["total_sales"] for a in product_agg.values()]) if product_agg else 1
-        avg_sales = (sum([a["total_sales"] for a in product_agg.values()]) / len(product_agg)) if product_agg else 0
+        # Accumulate return cargo loss from returned orders
+        for order in returned_qs:
+            fi = order.items.first()
+            if not fi or not fi.product_variant or not fi.product_variant.product:
+                continue
+
+            p = fi.product_variant.product
+            pk = p.barcode or p.marketplace_sku or p.title
+
+            # Only add to existing products (don't create new entries for returns-only products)
+            if pk in product_agg:
+                calc = ProfitCalculator.calculate_for_order(order)
+                cargo_loss = calc.get("cargo", Decimal("0"))
+                product_agg[pk]["return_cargo_loss"] += cargo_loss
+
+        max_sales = max([a["total_sold_quantity"] for a in product_agg.values()]) if product_agg else 1
+        avg_sales = (sum([a["total_sold_quantity"] for a in product_agg.values()]) / len(product_agg)) if product_agg else 0
 
         results = []
         for pk, agg in product_agg.items():
             revenue = agg["revenue"]
             profit = agg["net_profit"]
-            margin = (profit / revenue * Decimal("100")) if revenue > 0 else Decimal("0")
-            
-            normalized_velocity = (Decimal(agg["total_sales"]) / Decimal(max_sales)) * Decimal("100")
+            cost = agg["cost"]
+
+            # Kâr Oranı = Kâr / Satış Tutarı × 100
+            profit_rate = (profit / revenue * Decimal("100")) if revenue > 0 else Decimal("0")
+            # Kâr Marjı = Kâr / Maliyet × 100
+            profit_margin = (profit / cost * Decimal("100")) if cost > 0 else Decimal("0")
+
             return_rate_pct = agg["return_rate"]
-            
-            capped_margin = max(Decimal("0"), min(Decimal("100"), margin))
+            normalized_velocity = (Decimal(agg["total_sold_quantity"]) / Decimal(max_sales)) * Decimal("100")
+
+            capped_margin = max(Decimal("0"), min(Decimal("100"), profit_rate))
             capped_return = max(Decimal("0"), min(Decimal("100"), return_rate_pct))
-            
+
             score = (capped_margin * Decimal("0.4")) + (normalized_velocity * Decimal("0.3")) + ((Decimal("100") - capped_return) * Decimal("0.3"))
             score = max(Decimal("0"), min(score, Decimal("100"))).quantize(Decimal("0.1"))
-            
+
             segment = "Standard"
-            if profit > 0 and margin > 15 and agg["total_sales"] > avg_sales:
+            if profit > 0 and profit_rate > 15 and agg["total_sold_quantity"] > avg_sales:
                 segment = "Cash Cow"
-            elif profit > 0 and margin <= 15 and agg["total_sales"] > avg_sales:
+            elif profit > 0 and profit_rate <= 15 and agg["total_sold_quantity"] > avg_sales:
                 segment = "Growth"
-            elif profit <= 0 or agg["total_sales"] < (avg_sales * 0.2):
+            elif profit <= 0 or agg["total_sold_quantity"] < (avg_sales * 0.2):
                 segment = "Dead"
 
             tags = []
             if profit < 0: tags.append("Loss making")
-            if 0 <= margin < 10: tags.append("Low margin")
+            if 0 <= profit_rate < 10: tags.append("Low margin")
             if return_rate_pct > 10: tags.append("High return rate")
             if score >= 80: tags.append("Best performer")
-            
+
             actions = []
             if segment == "Cash Cow" and agg["stock"] < 20: actions.append("Restock")
             if "Loss making" in tags or segment == "Growth": actions.append("Increase price")
             if segment == "Dead" and agg["stock"] > 50: actions.append("Stop selling")
             if score >= 70 and agg["stock"] > 10: actions.append("Increase ads")
-            
+
             trend_arr = []
             for d in range(6, -1, -1):
                 date_str = (timezone.localtime(timezone.now(), tz_istanbul) - timedelta(days=d)).strftime("%Y-%m-%d")
@@ -1991,17 +2025,20 @@ class ProductAnalysisView(APIView):
                     "revenue": str(t_data["revenue"].quantize(Decimal("0.01"))),
                     "profit": str(t_data["profit"].quantize(Decimal("0.01")))
                 })
-                
+
             results.append({
                 "barcode": agg["barcode"],
-                "product_name": agg["product_name"],
+                "title": agg["title"],
+                "model_code": agg["model_code"],
                 "category": agg["category"],
                 "stock": agg["stock"],
-                "total_sales": agg["total_sales"],
-                "revenue": str(revenue.quantize(Decimal("0.01"))),
-                "net_profit": str(profit.quantize(Decimal("0.01"))),
-                "profit_margin": str(margin.quantize(Decimal("0.01"))),
-                "return_cost": str(agg["return_loss"].quantize(Decimal("0.01"))),
+                "total_sold_quantity": agg["total_sold_quantity"],
+                "total_sales_amount": str(revenue.quantize(Decimal("0.01"))),
+                "total_profit": str(profit.quantize(Decimal("0.01"))),
+                "return_cargo_loss": str(agg["return_cargo_loss"].quantize(Decimal("0.01"))),
+                "profit_rate": str(profit_rate.quantize(Decimal("0.01"))),
+                "profit_margin": str(profit_margin.quantize(Decimal("0.01"))),
+                # Extra fields used by advanced analysis page
                 "score": str(score),
                 "segment": segment,
                 "tags": tags,
@@ -2012,10 +2049,176 @@ class ProductAnalysisView(APIView):
                     "commission": str(agg["commission"].quantize(Decimal("0.01"))),
                     "cargo": str(agg["cargo"].quantize(Decimal("0.01"))),
                     "tax": str(agg["tax"].quantize(Decimal("0.01"))),
-                    "return_loss": str(agg["return_loss"].quantize(Decimal("0.01"))),
+                    "return_loss": str(agg["return_cargo_loss"].quantize(Decimal("0.01"))),
                     "net_profit": str(profit.quantize(Decimal("0.01"))),
                 }
             })
-            
-        results.sort(key=lambda x: Decimal(x["net_profit"]), reverse=True)
-        return Response({"products": results})
+
+        results.sort(key=lambda x: Decimal(x["total_profit"]), reverse=True)
+        return Response({"ok": True, "data": results})
+
+
+class ProductProfitabilityExcelExportView(APIView):
+    """
+    GET /api/reports/product-profitability/export-excel/
+    Ürün kârlılık verilerini Excel olarak dışa aktarır.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            org = request.user.profile.organization
+        except Exception:
+            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+
+        import openpyxl
+        from openpyxl.styles import PatternFill, Font, Alignment
+        from io import BytesIO
+        from django.http import HttpResponse
+        from datetime import datetime as dt_cls, time as dt_time, timedelta
+        from collections import defaultdict
+
+        tz_istanbul = timezone.get_fixed_timezone(180)
+        min_date_str = request.query_params.get("min_date") or request.query_params.get("start_date")
+        max_date_str = request.query_params.get("max_date") or request.query_params.get("end_date")
+
+        if min_date_str and max_date_str:
+            try:
+                min_date = dt_cls.strptime(min_date_str, "%Y-%m-%d").replace(tzinfo=tz_istanbul)
+                max_date = dt_cls.combine(
+                    dt_cls.strptime(max_date_str, "%Y-%m-%d").date(), dt_time.max
+                ).replace(tzinfo=tz_istanbul)
+            except ValueError:
+                min_date = timezone.localtime(timezone.now() - timedelta(days=30), tz_istanbul)
+                max_date = timezone.localtime(timezone.now(), tz_istanbul)
+        else:
+            min_date = timezone.localtime(timezone.now() - timedelta(days=30), tz_istanbul)
+            max_date = timezone.localtime(timezone.now(), tz_istanbul)
+
+        orders_qs = Order.objects.filter(
+            organization=org,
+            order_date__gte=min_date,
+            order_date__lte=max_date,
+        ).exclude(
+            status__in=["Cancelled", "Returned", "UnSupplied"]
+        ).prefetch_related(
+            'items__product_variant__product',
+            'items__transactions'
+        ).select_related('marketplace_account').order_by('order_date')
+
+        returned_qs = Order.objects.filter(
+            organization=org,
+            order_date__gte=min_date,
+            order_date__lte=max_date,
+            status="Returned",
+        ).prefetch_related(
+            'items__product_variant__product',
+            'items__transactions'
+        ).select_related('marketplace_account')
+
+        product_agg = defaultdict(lambda: {
+            "barcode": "",
+            "title": "",
+            "model_code": "",
+            "category": "",
+            "stock": 0,
+            "total_sold_quantity": 0,
+            "revenue": Decimal("0"),
+            "net_profit": Decimal("0"),
+            "return_cargo_loss": Decimal("0"),
+            "cost": Decimal("0"),
+        })
+
+        for order in orders_qs:
+            calc = ProfitCalculator.calculate_for_order(order)
+            fi = order.items.first()
+            if not fi or not fi.product_variant or not fi.product_variant.product:
+                continue
+
+            p = fi.product_variant.product
+            v = fi.product_variant
+            pk = p.barcode or p.marketplace_sku or p.title
+
+            agg = product_agg[pk]
+            if not agg["barcode"]:
+                agg["barcode"] = pk
+                agg["title"] = p.title
+                agg["model_code"] = v.marketplace_sku or p.marketplace_sku or ""
+                agg["category"] = p.category_name
+                agg["stock"] = p.current_stock
+
+            agg["total_sold_quantity"] += 1
+            agg["revenue"] += calc["total_sale"]
+            agg["net_profit"] += calc["net_profit"]
+            agg["cost"] += calc["product_cost"] + calc.get("extra_product_cost", Decimal("0"))
+
+        for order in returned_qs:
+            fi = order.items.first()
+            if not fi or not fi.product_variant or not fi.product_variant.product:
+                continue
+            p = fi.product_variant.product
+            pk = p.barcode or p.marketplace_sku or p.title
+            if pk in product_agg:
+                calc = ProfitCalculator.calculate_for_order(order)
+                product_agg[pk]["return_cargo_loss"] += calc.get("cargo", Decimal("0"))
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Ürün Kârlılık"
+
+        header_fill = PatternFill(start_color="1E3A5F", end_color="1E3A5F", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True, size=10)
+        profit_fill = PatternFill(start_color="C8E6C9", end_color="C8E6C9", fill_type="solid")
+        loss_fill = PatternFill(start_color="FFCDD2", end_color="FFCDD2", fill_type="solid")
+
+        columns = [
+            "Barkod", "Ürün Adı", "Stok", "Model Kodu", "Kategori",
+            "Satış Adedi", "Satış Tutarı (₺)", "Kâr Tutarı (₺)",
+            "İade Kargo Zararı (₺)", "Kâr Oranı (%)", "Kâr Marjı (%)",
+        ]
+        ws.append(columns)
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 25
+
+        col_widths = [18, 40, 8, 18, 20, 12, 18, 18, 20, 14, 14]
+        for i, w in enumerate(col_widths, 1):
+            ws.column_dimensions[ws.cell(1, i).column_letter].width = w
+
+        results = sorted(product_agg.values(), key=lambda x: x["net_profit"], reverse=True)
+        for agg in results:
+            revenue = agg["revenue"]
+            profit = agg["net_profit"]
+            cost = agg["cost"]
+            profit_rate = float((profit / revenue * Decimal("100")).quantize(Decimal("0.01"))) if revenue > 0 else 0.0
+            profit_margin = float((profit / cost * Decimal("100")).quantize(Decimal("0.01"))) if cost > 0 else 0.0
+
+            row = [
+                agg["barcode"],
+                agg["title"],
+                agg["stock"],
+                agg["model_code"],
+                agg["category"],
+                agg["total_sold_quantity"],
+                float(revenue.quantize(Decimal("0.01"))),
+                float(profit.quantize(Decimal("0.01"))),
+                float(agg["return_cargo_loss"].quantize(Decimal("0.01"))),
+                profit_rate,
+                profit_margin,
+            ]
+            ws.append(row)
+            profit_cell = ws.cell(ws.max_row, 8)
+            profit_cell.fill = profit_fill if profit >= 0 else loss_fill
+
+        buffer = BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+
+        response = HttpResponse(
+            buffer.read(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = 'attachment; filename="Urun_Karliligi.xlsx"'
+        return response

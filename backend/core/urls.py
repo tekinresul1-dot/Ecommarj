@@ -11,6 +11,7 @@ from .views import (
     CategoryAnalysisView, ReturnAnalysisView, AdsAnalysisView,
     ProductExcelExportView, ProductExcelImportView, ProductStockSyncView,
     OrderExcelExportView, LivePerformanceView,
+    ProductProfitabilityExcelExportView,
 )
 from .sync_views import (
     TrendyolFullSyncView, TrendyolIncrementalSyncView,
@@ -59,6 +60,7 @@ urlpatterns = [
     
     # Reports — specific endpoints first, then catch-all mock
     path("reports/product-analysis/", ProductAnalysisView.as_view(), name="product-analysis"),
+    path("reports/product-profitability/export-excel/", ProductProfitabilityExcelExportView.as_view(), name="product-profitability-export"),
     path("reports/categories/", CategoryAnalysisView.as_view(), name="category-analysis"),
     path("reports/returns/", ReturnAnalysisView.as_view(), name="return-analysis"),
     path("reports/ads/", AdsAnalysisView.as_view(), name="ads-analysis"),

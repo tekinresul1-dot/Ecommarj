@@ -87,8 +87,9 @@ export default function ProductAnalysisPage() {
         try {
             setLoading(true);
             const res = await api.get("/reports/product-analysis/");
-            if (res.data?.data) {
-                setProducts(res.data.data);
+            // api.get returns raw JSON: {"ok": true, "data": [...]}
+            if (res.data && Array.isArray(res.data)) {
+                setProducts(res.data);
             }
         } catch (err: any) {
             setError(err.response?.data?.error || "Veriler yüklenirken bir hata oluştu.");

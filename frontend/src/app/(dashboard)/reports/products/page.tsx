@@ -1,18 +1,24 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { formatCurrency, formatPercentage } from "@/lib/utils/format";
 import apiClient from "@/lib/api/client";
-import { Filter, Download, RefreshCw } from "lucide-react";
+import {
+  Filter,
+  Download,
+  RefreshCw,
+  Package,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
+} from "lucide-react";
 import clsx from "clsx";
-
 import { TableFilter, FilterState, FilterColumn, applyTableFilter } from "@/components/dashboard/TableFilter";
 import { DatePickerWithRange } from "@/components/dashboard/DateRangePicker";
 import { DateRange } from "react-day-picker";
 import { format, subDays } from "date-fns";
 
-interface ProductAnalysis {
-  id: string; // barcode used as id
+interface ProductProfitability {
   barcode: string;
   title: string;
   stock: number;
@@ -22,9 +28,12 @@ interface ProductAnalysis {
   total_sales_amount: string;
   total_profit: string;
   return_cargo_loss: string;
-  profit_margin: string;
   profit_rate: string;
+  profit_margin: string;
 }
+
+type SortKey = keyof ProductProfitability;
+type SortDir = "asc" | "desc";
 
 const FILTER_COLUMNS: FilterColumn[] = [
   { id: "barcode", label: "Barkod", type: "text" },
@@ -32,66 +41,169 @@ const FILTER_COLUMNS: FilterColumn[] = [
   { id: "model_code", label: "Model Kodu", type: "text" },
   { id: "category", label: "Kategori", type: "text" },
   { id: "stock", label: "Stok", type: "number" },
-  { id: "total_sold_quantity", label: "Satılan Adet", type: "number" },
+  { id: "total_sold_quantity", label: "Satış Adedi", type: "number" },
   { id: "total_sales_amount", label: "Satış Tutarı (₺)", type: "number" },
   { id: "total_profit", label: "Kâr Tutarı (₺)", type: "number" },
+  { id: "return_cargo_loss", label: "İade Kargo Zararı (₺)", type: "number" },
   { id: "profit_rate", label: "Kâr Oranı (%)", type: "number" },
   { id: "profit_margin", label: "Kâr Marjı (%)", type: "number" },
 ];
 
-export default function ProductAnalysisPage() {
-  const [products, setProducts] = useState<ProductAnalysis[]>([]);
-  const [loading, setLoading] = useState(true);
+const COLUMNS: { key: SortKey; label: string; align?: "right" }[] = [
+  { key: "barcode", label: "Barkod" },
+  { key: "title", label: "Ürün Adı" },
+  { key: "stock", label: "Stok", align: "right" },
+  { key: "model_code", label: "Model Kodu" },
+  { key: "category", label: "Kategori" },
+  { key: "total_sold_quantity", label: "Satış Adedi", align: "right" },
+  { key: "total_sales_amount", label: "Satış Tutarı", align: "right" },
+  { key: "total_profit", label: "Kâr Tutarı", align: "right" },
+  { key: "return_cargo_loss", label: "İade Kargo Zararı", align: "right" },
+  { key: "profit_rate", label: "Kâr Oranı (%)", align: "right" },
+  { key: "profit_margin", label: "Kâr Marjı (%)", align: "right" },
+];
 
-  // Date Range State
+function sortProducts(
+  data: ProductProfitability[],
+  key: SortKey,
+  dir: SortDir
+): ProductProfitability[] {
+  return [...data].sort((a, b) => {
+    const numericKeys: SortKey[] = [
+      "stock",
+      "total_sold_quantity",
+      "total_sales_amount",
+      "total_profit",
+      "return_cargo_loss",
+      "profit_rate",
+      "profit_margin",
+    ];
+    let valA: number | string;
+    let valB: number | string;
+    if (numericKeys.includes(key)) {
+      valA = parseFloat(String(a[key])) || 0;
+      valB = parseFloat(String(b[key])) || 0;
+    } else {
+      valA = String(a[key] ?? "").toLowerCase();
+      valB = String(b[key] ?? "").toLowerCase();
+    }
+    if (valA < valB) return dir === "asc" ? -1 : 1;
+    if (valA > valB) return dir === "asc" ? 1 : -1;
+    return 0;
+  });
+}
+
+function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey | null; sortDir: SortDir }) {
+  if (sortKey !== col) return <ChevronsUpDown className="w-3 h-3 ml-1 opacity-30" />;
+  return sortDir === "asc"
+    ? <ChevronUp className="w-3 h-3 ml-1 text-blue-400" />
+    : <ChevronDown className="w-3 h-3 ml-1 text-blue-400" />;
+}
+
+export default function ProductProfitabilityPage() {
+  const [products, setProducts] = useState<ProductProfitability[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isExporting, setIsExporting] = useState(false);
+
   const [date, setDate] = useState<DateRange | undefined>({
     from: subDays(new Date(), 30),
     to: new Date(),
   });
 
-  // Filtering State
   const [showFilter, setShowFilter] = useState(false);
   const [tableFilter, setTableFilter] = useState<FilterState | null>(null);
 
-  useEffect(() => {
-    handleDateFilter();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date]);
+  const [sortKey, setSortKey] = useState<SortKey | null>("total_profit");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  const fetchProducts = async (minDate?: string, maxDate?: string) => {
+  const fetchProducts = useCallback(async (minDate?: string, maxDate?: string) => {
     setLoading(true);
     try {
       let url = "/reports/product-analysis/";
-      if (minDate && maxDate) {
-        url += `?min_date=${minDate}&max_date=${maxDate}`;
-      }
-      const result = await apiClient.get<ProductAnalysis[]>(url);
-      if (result.ok && result.data) {
+      const params: string[] = [];
+      if (minDate) params.push(`min_date=${minDate}`);
+      if (maxDate) params.push(`max_date=${maxDate}`);
+      if (params.length) url += "?" + params.join("&");
+
+      // apiClient extracts data.data automatically, so result.data is ProductProfitability[]
+      const result = await apiClient.get<ProductProfitability[]>(url);
+      if (result.ok && Array.isArray(result.data)) {
         setProducts(result.data);
       }
     } catch (error) {
-      console.error("Product analysis fetch error:", error);
+      console.error("Product profitability fetch error:", error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const handleDateFilter = () => {
+  const handleDateFilter = useCallback(() => {
     if (date?.from && date?.to) {
       fetchProducts(format(date.from, "yyyy-MM-dd"), format(date.to, "yyyy-MM-dd"));
     } else {
       fetchProducts();
     }
+  }, [date, fetchProducts]);
+
+  useEffect(() => {
+    handleDateFilter();
+  }, [handleDateFilter]);
+
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
   };
 
-  const filteredProducts = applyTableFilter(products, tableFilter);
+  const handleExcelExport = async () => {
+    setIsExporting(true);
+    try {
+      const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : "";
+      let url = "/api/reports/product-profitability/export-excel/";
+      const params: string[] = [];
+      if (date?.from) params.push(`min_date=${format(date.from, "yyyy-MM-dd")}`);
+      if (date?.to) params.push(`max_date=${format(date.to, "yyyy-MM-dd")}`);
+      if (params.length) url += "?" + params.join("&");
+
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Export başarısız");
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = "Urun_Karliligi.xlsx";
+      link.click();
+      URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error("Excel export error:", err);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const filtered = applyTableFilter(products, tableFilter);
+  const sorted = sortKey ? sortProducts(filtered, sortKey, sortDir) : filtered;
 
   return (
     <div className="p-6">
+      {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6">
-        <h1 className="text-2xl font-bold text-white tracking-tight">Ürün Analizi</h1>
+        <div className="flex items-center gap-3">
+          <Package className="w-5 h-5 text-green-400" />
+          <div>
+            <h1 className="text-2xl font-bold text-white tracking-tight">Ürün Kârlılık Analizi</h1>
+            <p className="text-xs text-white/40">Ürün bazında satış ve kârlılık özeti</p>
+          </div>
+        </div>
+
         <div className="flex flex-wrap items-center gap-3">
           <DatePickerWithRange date={date} setDate={setDate} />
+
           <button
             onClick={handleDateFilter}
             className="flex items-center justify-center w-10 h-10 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors shadow-lg shadow-blue-900/20"
@@ -100,7 +212,7 @@ export default function ProductAnalysisPage() {
             <RefreshCw className="w-4 h-4" />
           </button>
 
-          <div className="w-px h-8 bg-white/10 mx-1 hidden sm:block"></div>
+          <div className="w-px h-8 bg-white/10 mx-1 hidden sm:block" />
 
           <button
             onClick={() => setShowFilter(!showFilter)}
@@ -112,15 +224,22 @@ export default function ProductAnalysisPage() {
             )}
           >
             <Filter className="w-4 h-4" />
-            Tabloda Ara {(tableFilter) && <span className="w-2 h-2 rounded-full bg-blue-500 ml-1"></span>}
+            Tabloda Ara
+            {tableFilter && <span className="w-2 h-2 rounded-full bg-blue-500 ml-1" />}
           </button>
-          <button className="flex items-center gap-2 bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-green-900/20 h-10">
+
+          <button
+            onClick={handleExcelExport}
+            disabled={isExporting}
+            className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-60 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-green-900/20 h-10"
+          >
             <Download className="w-4 h-4" />
-            İndir
+            {isExporting ? "İndiriliyor..." : "Raporu İndir"}
           </button>
         </div>
       </div>
 
+      {/* Filter panel */}
       {showFilter && (
         <div className="mb-4">
           <TableFilter
@@ -131,100 +250,159 @@ export default function ProductAnalysisPage() {
         </div>
       )}
 
+      {/* Summary row */}
+      {!loading && sorted.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+          <div className="bg-navy-900 border border-white/5 rounded-xl px-4 py-3">
+            <p className="text-[10px] text-white/40 uppercase tracking-wider mb-1">Ürün Sayısı</p>
+            <p className="text-xl font-bold text-white">{sorted.length.toLocaleString("tr-TR")}</p>
+          </div>
+          <div className="bg-navy-900 border border-white/5 rounded-xl px-4 py-3">
+            <p className="text-[10px] text-white/40 uppercase tracking-wider mb-1">Toplam Satış</p>
+            <p className="text-xl font-bold text-white">
+              {sorted.reduce((s, p) => s + p.total_sold_quantity, 0).toLocaleString("tr-TR")}
+            </p>
+          </div>
+          <div className="bg-navy-900 border border-white/5 rounded-xl px-4 py-3">
+            <p className="text-[10px] text-white/40 uppercase tracking-wider mb-1">Toplam Satış Tutarı</p>
+            <p className="text-xl font-bold text-white">
+              {formatCurrency(sorted.reduce((s, p) => s + parseFloat(p.total_sales_amount), 0))}
+            </p>
+          </div>
+          <div className="bg-navy-900 border border-white/5 rounded-xl px-4 py-3">
+            <p className="text-[10px] text-white/40 uppercase tracking-wider mb-1">Toplam Kâr</p>
+            {(() => {
+              const totalProfit = sorted.reduce((s, p) => s + parseFloat(p.total_profit), 0);
+              return (
+                <p className={clsx("text-xl font-bold", totalProfit >= 0 ? "text-green-400" : "text-red-400")}>
+                  {formatCurrency(totalProfit)}
+                </p>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Table */}
       <div className="bg-navy-900 rounded-xl border border-white/5 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm text-white/80">
-            <thead className="bg-navy-800/50 text-white border-b border-light-navy uppercase text-[10px] tracking-wider font-semibold">
+            <thead className="bg-navy-800/50 text-white border-b border-white/5 uppercase text-[10px] tracking-wider font-semibold">
               <tr>
-                <th className="px-4 py-4 whitespace-nowrap">Barkod</th>
-                <th className="px-4 py-4 whitespace-nowrap">Ürün Adı</th>
-                <th className="px-4 py-4 whitespace-nowrap">Stok</th>
-                <th className="px-4 py-4 whitespace-nowrap">Model Kodu</th>
-                <th className="px-4 py-4 whitespace-nowrap">Kategori</th>
-                <th className="px-4 py-4 whitespace-nowrap text-right">Satılan Adet</th>
-                <th className="px-4 py-4 whitespace-nowrap text-right">Satış Tutarı (₺)</th>
-                <th className="px-4 py-4 whitespace-nowrap text-right">Kâr Tutarı (₺)</th>
-                <th className="px-4 py-4 whitespace-nowrap text-right">İade Kargo Zararı (₺)</th>
-                <th className="px-4 py-4 whitespace-nowrap text-right">Kâr Oranı (%)</th>
-                <th className="px-4 py-4 whitespace-nowrap text-right">Kâr Marjı (%)</th>
+                {COLUMNS.map((col) => (
+                  <th
+                    key={col.key}
+                    onClick={() => handleSort(col.key)}
+                    className={clsx(
+                      "px-4 py-4 whitespace-nowrap cursor-pointer select-none",
+                      "hover:bg-white/5 transition-colors",
+                      col.align === "right" && "text-right"
+                    )}
+                  >
+                    <span className={clsx("inline-flex items-center gap-0.5", col.align === "right" && "flex-row-reverse")}>
+                      {col.label}
+                      <SortIcon col={col.key} sortKey={sortKey} sortDir={sortDir} />
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
               {loading ? (
                 <tr>
-                  <td colSpan={11} className="px-6 py-8 text-center text-white/50">
+                  <td colSpan={11} className="px-6 py-10 text-center text-white/50">
                     <div className="flex justify-center items-center gap-3">
-                      <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                      <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
                       Ürün verileri yükleniyor...
                     </div>
                   </td>
                 </tr>
-              ) : filteredProducts.length === 0 ? (
+              ) : sorted.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-6 py-8 text-center text-white/50">
-                    Ürün bulunamadı. Filtreleri temizlemeyi deneyin.
+                  <td colSpan={11} className="px-6 py-10 text-center text-white/50">
+                    Ürün bulunamadı. Tarih aralığını veya filtreleri değiştirmeyi deneyin.
                   </td>
                 </tr>
               ) : (
-                filteredProducts.map((item) => {
+                sorted.map((item) => {
                   const profitVal = parseFloat(item.total_profit);
                   const lossVal = parseFloat(item.return_cargo_loss);
-                  const isProfitable = profitVal > 0;
+                  const profitRateVal = parseFloat(item.profit_rate);
+                  const profitMarginVal = parseFloat(item.profit_margin);
+                  const isProfit = profitVal > 0;
                   const isLoss = profitVal < 0;
 
                   return (
-                    <tr key={item.id} className="hover:bg-white/5 transition-colors group">
-                      <td className="px-4 py-3 whitespace-nowrap font-medium text-white/90">
+                    <tr key={item.barcode} className="hover:bg-white/5 transition-colors group">
+                      {/* Barkod */}
+                      <td className="px-4 py-3 whitespace-nowrap font-mono text-xs text-white/70">
                         {item.barcode}
                       </td>
-                      <td className="px-4 py-3 min-w-[200px] max-w-[300px] truncate" title={item.title}>
-                        {item.title}
+
+                      {/* Ürün Adı */}
+                      <td className="px-4 py-3 min-w-[200px] max-w-[280px]">
+                        <span
+                          className="truncate block text-white/90 group-hover:text-white cursor-pointer hover:text-blue-400 transition-colors"
+                          title={item.title}
+                          onClick={() => {
+                            const encoded = encodeURIComponent(item.barcode);
+                            window.location.href = `/product-settings?barcode=${encoded}`;
+                          }}
+                        >
+                          {item.title}
+                        </span>
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-white/70">
-                        {item.stock}
+
+                      {/* Stok */}
+                      <td className="px-4 py-3 whitespace-nowrap text-right text-white/70">
+                        {item.stock.toLocaleString("tr-TR")}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-white/70">
-                        {item.model_code || "-"}
+
+                      {/* Model Kodu */}
+                      <td className="px-4 py-3 whitespace-nowrap text-white/60 text-xs">
+                        {item.model_code || <span className="text-white/30">—</span>}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-white/70">
-                        {item.category || "-"}
+
+                      {/* Kategori */}
+                      <td className="px-4 py-3 whitespace-nowrap text-white/60 max-w-[160px] truncate" title={item.category}>
+                        {item.category || <span className="text-white/30">—</span>}
                       </td>
+
+                      {/* Satış Adedi */}
                       <td className="px-4 py-3 whitespace-nowrap text-right font-medium text-blue-400">
-                        {item.total_sold_quantity}
+                        {item.total_sold_quantity.toLocaleString("tr-TR")}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-right font-medium text-red-400">
+
+                      {/* Satış Tutarı */}
+                      <td className="px-4 py-3 whitespace-nowrap text-right font-medium text-white/80">
                         {formatCurrency(parseFloat(item.total_sales_amount))}
                       </td>
+
+                      {/* Kâr Tutarı */}
                       <td className="px-4 py-3 whitespace-nowrap text-right">
-                        <span className={clsx(
-                          "font-bold",
-                          isProfitable ? "text-green-500" : isLoss ? "text-red-400" : "text-white/80"
-                        )}>
+                        <span className={clsx("font-bold", isProfit ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80")}>
                           {formatCurrency(profitVal)}
                         </span>
                       </td>
+
+                      {/* İade Kargo Zararı */}
                       <td className="px-4 py-3 whitespace-nowrap text-right">
-                        <span className={clsx(
-                          "font-medium",
-                          lossVal > 0 ? "text-red-400" : "text-white/60"
-                        )}>
-                          {lossVal > 0 ? `-${formatCurrency(lossVal)}` : "₺0,00"}
+                        <span className={clsx("font-medium", lossVal > 0 ? "text-red-400" : "text-white/40")}>
+                          {lossVal > 0 ? `-${formatCurrency(lossVal)}` : "—"}
                         </span>
                       </td>
+
+                      {/* Kâr Oranı */}
                       <td className="px-4 py-3 whitespace-nowrap text-right">
-                        <span className={clsx(
-                          "font-medium",
-                          isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80"
-                        )}>
-                          {formatPercentage(parseFloat(item.profit_rate))}
+                        <span className={clsx("font-medium", isProfit ? "text-green-400" : isLoss ? "text-red-400" : "text-white/70")}>
+                          {formatPercentage(profitRateVal)}
                         </span>
                       </td>
+
+                      {/* Kâr Marjı */}
                       <td className="px-4 py-3 whitespace-nowrap text-right">
-                        <span className={clsx(
-                          "font-medium",
-                          isProfitable ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80"
-                        )}>
-                          {formatPercentage(parseFloat(item.profit_margin))}
+                        <span className={clsx("font-medium", isProfit ? "text-green-400" : isLoss ? "text-red-400" : "text-white/70")}>
+                          {formatPercentage(profitMarginVal)}
                         </span>
                       </td>
                     </tr>
@@ -234,6 +412,21 @@ export default function ProductAnalysisPage() {
             </tbody>
           </table>
         </div>
+
+        {/* Footer */}
+        {!loading && sorted.length > 0 && (
+          <div className="px-4 py-3 border-t border-white/5 flex items-center justify-between">
+            <p className="text-xs text-white/40">
+              {sorted.length.toLocaleString("tr-TR")} ürün gösteriliyor
+              {tableFilter ? ` (filtre uygulandı)` : ""}
+            </p>
+            <p className="text-xs text-white/30">
+              {date?.from && date?.to
+                ? `${format(date.from, "dd.MM.yyyy")} – ${format(date.to, "dd.MM.yyyy")}`
+                : ""}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1907,13 +1907,19 @@ class ProductProfitabilityView(APIView):
             'items__transactions',
         )
 
+        # Delivered = satış sayılır; Returned/Cancelled/UnSupplied = iade kargo zararı
+        SOLD_STATUSES     = {"Delivered"}
         RETURNED_STATUSES = {"Returned", "Cancelled", "UnSupplied"}
 
         # barcode → aggregated data
         agg_map: dict = {}
 
         for order in orders_qs:
+            is_sold     = order.status in SOLD_STATUSES
             is_returned = order.status in RETURNED_STATUSES
+
+            if not is_sold and not is_returned:
+                continue  # Shipped/Picking/Created: ne satış ne iade sayılır
 
             for item in order.items.all():
                 variant = item.product_variant
@@ -1929,31 +1935,38 @@ class ProductProfitabilityView(APIView):
                 # İlk görüldüğünde meta verileri kaydet
                 if barcode not in agg_map:
                     agg_map[barcode] = {
-                        "barcode":          barcode,
-                        "product_name":     product.title,
-                        "stock":            product.current_stock,
-                        "model_code":       product.marketplace_sku or "",
-                        "category":         product.category_name or "",
-                        "total_sales":      Decimal("0.00"),
-                        "total_profit":     Decimal("0.00"),
+                        "barcode":           barcode,
+                        "product_name":      product.title,
+                        "stock":             product.current_stock,
+                        "model_code":        product.marketplace_sku or "",
+                        "category":          product.category_name or "",
+                        "total_sales":       Decimal("0.00"),
+                        "total_profit":      Decimal("0.00"),
+                        "total_cost":        Decimal("0.00"),
                         "return_cargo_loss": Decimal("0.00"),
-                        "order_count":      0,
-                        "return_count":     0,
+                        "order_count":       0,
+                        "return_count":      0,
                     }
 
-                profit_info = ProfitCalculator.calculate_for_order_item(item)
-                bd          = profit_info.get("breakdown", {})
-                shipping    = bd.get(FinancialTransactionType.SHIPPING_FEE.value, Decimal("0.00"))
+                try:
+                    profit_info = ProfitCalculator.calculate_for_order_item(item)
+                except Exception:
+                    continue
+
+                bd       = profit_info.get("breakdown", {})
+                shipping = bd.get(FinancialTransactionType.SHIPPING_FEE.value, Decimal("0.00"))
+                cost     = bd.get(FinancialTransactionType.PRODUCT_COST.value, Decimal("0.00"))
 
                 if is_returned:
                     # İade sipariş: kargo kaybını iade_kargo_zarari'ne ekle
                     agg_map[barcode]["return_cargo_loss"] += shipping
                     agg_map[barcode]["return_count"]      += item.quantity
                 else:
-                    # Aktif sipariş: satış ve kâra ekle
+                    # Delivered sipariş: satış adedi, tutar ve kâra ekle
                     agg_map[barcode]["total_sales"]  += profit_info["gross_revenue"]
                     agg_map[barcode]["total_profit"] += profit_info["net_profit"]
-                    agg_map[barcode]["order_count"]  += 1
+                    agg_map[barcode]["total_cost"]   += cost
+                    agg_map[barcode]["order_count"]  += item.quantity  # Satış adedi = toplam adet
 
         # Search filtresi
         if search:
@@ -1975,16 +1988,17 @@ class ProductProfitabilityView(APIView):
         for barcode, agg in agg_map.items():
             satis  = agg["total_sales"]
             profit = agg["total_profit"]
+            cost   = agg["total_cost"]
 
-            profit_rate   = Decimal("0.00")
-            profit_margin = Decimal("0.00")
+            # Kâr Oranı = Kâr / Satış × 100
+            profit_rate = Decimal("0.00")
             if satis > Decimal("0.00"):
-                profit_rate   = (profit / satis * Decimal("100")).quantize(q2)
-                # Kâr marjı: net_kar / net_satış (KDV hariç) * 100
-                # Net satış ≈ Gross / (1 + kdv_rate/100) — burda gross = satis zaten
-                # Approx: ProfitCalculator net_revenue = satis - satis_kdv
-                # Basit yaklaşım: profit_margin ≈ profit_rate (KDV küçük fark yaratır)
-                profit_margin = profit_rate
+                profit_rate = (profit / satis * Decimal("100")).quantize(q2)
+
+            # Kâr Marjı = Kâr / Maliyet × 100
+            profit_margin = Decimal("0.00")
+            if cost > Decimal("0.00"):
+                profit_margin = (profit / cost * Decimal("100")).quantize(q2)
 
             total_sales_sum  += satis
             total_profit_sum += profit

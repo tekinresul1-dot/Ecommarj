@@ -6,7 +6,7 @@ from .auth_views import (
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     DashboardOverviewView, MockReportsView, TriggerSyncView,
-    ProductListView, OrderListView, ProductAnalysisView,
+    ProductListView, OrderListView, ProductAnalysisView, ProductProfitabilityView,
     TrendyolTestConnectionView, TrendyolSaveCredentialsView,
     CategoryAnalysisView, ReturnAnalysisView, AdsAnalysisView,
     ProductExcelExportView, ProductExcelImportView, ProductStockSyncView,
@@ -59,6 +59,7 @@ urlpatterns = [
     path("live-performance/", LivePerformanceView.as_view(), name="live-performance"),
     
     # Reports — specific endpoints first, then catch-all mock
+    path("reports/product-profitability/", ProductProfitabilityView.as_view(), name="product-profitability"),
     path("reports/product-analysis/", ProductAnalysisView.as_view(), name="product-analysis"),
     path("reports/product-profitability/export-excel/", ProductProfitabilityExcelExportView.as_view(), name="product-profitability-export"),
     path("reports/categories/", CategoryAnalysisView.as_view(), name="category-analysis"),

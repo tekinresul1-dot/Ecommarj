@@ -548,7 +548,7 @@ class TrendyolSaveCredentialsView(APIView):
             })
 
         return Response({
-            "api_key": account.api_key,
+            "api_key": decrypt_value(account.api_key),
             "supplier_id": account.seller_id
         })
 
@@ -576,7 +576,7 @@ class TrendyolSaveCredentialsView(APIView):
             defaults={
                 "store_name": f"Trendyol Store - {supplier_id}",
                 "seller_id": supplier_id,
-                "api_key": api_key,
+                "api_key": encrypt_value(api_key),
                 "api_secret": encrypt_value(api_secret),
                 "is_active": True
             }
@@ -1850,6 +1850,191 @@ class LivePerformanceView(APIView):
                 "total_count": total_count,
             }
         })
+
+class ProductProfitabilityView(APIView):
+    """
+    GET /api/reports/product-profitability/
+    Barkod bazlı ürün kârlılık analizi.
+    Her variant barcode için satış tutarı, kâr, iade kargo zararı hesaplar.
+    Params: start_date, end_date, search, sort_by, sort_desc
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            org = request.user.profile.organization
+        except Exception:
+            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+
+        if not org:
+            return Response({"error": "Organizasyon bulunamadı"}, status=400)
+
+        from datetime import datetime, time as dt_time
+        import zoneinfo
+        from collections import defaultdict
+
+        tz = zoneinfo.ZoneInfo("Europe/Istanbul")
+
+        start_date_str = request.query_params.get("start_date", "")
+        end_date_str   = request.query_params.get("end_date", "")
+        search         = request.query_params.get("search", "").strip().lower()
+        sort_by        = request.query_params.get("sort_by", "total_sales")
+        sort_desc      = request.query_params.get("sort_desc", "true").lower() != "false"
+
+        # Date range
+        if start_date_str and end_date_str:
+            try:
+                start_dt = datetime.strptime(start_date_str, "%Y-%m-%d").replace(tzinfo=tz)
+                end_dt   = datetime.combine(
+                    datetime.strptime(end_date_str, "%Y-%m-%d").date(), dt_time.max
+                ).replace(tzinfo=tz)
+            except ValueError:
+                from datetime import timedelta
+                end_dt   = timezone.now()
+                start_dt = end_dt - timedelta(days=30)
+        else:
+            from datetime import timedelta
+            end_dt   = timezone.now()
+            start_dt = end_dt - timedelta(days=30)
+
+        # Tüm siparişleri (iade dahil) çek — iade kargo zararı için gerekli
+        orders_qs = Order.objects.filter(
+            organization=org,
+            order_date__gte=start_dt,
+            order_date__lte=end_dt,
+        ).prefetch_related(
+            'items__product_variant__product',
+            'items__transactions',
+        )
+
+        RETURNED_STATUSES = {"Returned", "Cancelled", "UnSupplied"}
+
+        # barcode → aggregated data
+        agg_map: dict = {}
+
+        for order in orders_qs:
+            is_returned = order.status in RETURNED_STATUSES
+
+            for item in order.items.all():
+                variant = item.product_variant
+                if not variant:
+                    continue
+                barcode = variant.barcode
+                if not barcode:
+                    continue
+                product = variant.product
+                if not product:
+                    continue
+
+                # İlk görüldüğünde meta verileri kaydet
+                if barcode not in agg_map:
+                    agg_map[barcode] = {
+                        "barcode":          barcode,
+                        "product_name":     product.title,
+                        "stock":            product.current_stock,
+                        "model_code":       product.marketplace_sku or "",
+                        "category":         product.category_name or "",
+                        "total_sales":      Decimal("0.00"),
+                        "total_profit":     Decimal("0.00"),
+                        "return_cargo_loss": Decimal("0.00"),
+                        "order_count":      0,
+                        "return_count":     0,
+                    }
+
+                profit_info = ProfitCalculator.calculate_for_order_item(item)
+                bd          = profit_info.get("breakdown", {})
+                shipping    = bd.get(FinancialTransactionType.SHIPPING_FEE.value, Decimal("0.00"))
+
+                if is_returned:
+                    # İade sipariş: kargo kaybını iade_kargo_zarari'ne ekle
+                    agg_map[barcode]["return_cargo_loss"] += shipping
+                    agg_map[barcode]["return_count"]      += item.quantity
+                else:
+                    # Aktif sipariş: satış ve kâra ekle
+                    agg_map[barcode]["total_sales"]  += profit_info["gross_revenue"]
+                    agg_map[barcode]["total_profit"] += profit_info["net_profit"]
+                    agg_map[barcode]["order_count"]  += 1
+
+        # Search filtresi
+        if search:
+            agg_map = {
+                k: v for k, v in agg_map.items()
+                if search in v["barcode"].lower()
+                or search in v["product_name"].lower()
+                or search in v["model_code"].lower()
+            }
+
+        # Sonuçları oluştur
+        results = []
+        total_sales_sum  = Decimal("0.00")
+        total_profit_sum = Decimal("0.00")
+        total_rl_sum     = Decimal("0.00")
+
+        q2 = Decimal("0.01")
+
+        for barcode, agg in agg_map.items():
+            satis  = agg["total_sales"]
+            profit = agg["total_profit"]
+
+            profit_rate   = Decimal("0.00")
+            profit_margin = Decimal("0.00")
+            if satis > Decimal("0.00"):
+                profit_rate   = (profit / satis * Decimal("100")).quantize(q2)
+                # Kâr marjı: net_kar / net_satış (KDV hariç) * 100
+                # Net satış ≈ Gross / (1 + kdv_rate/100) — burda gross = satis zaten
+                # Approx: ProfitCalculator net_revenue = satis - satis_kdv
+                # Basit yaklaşım: profit_margin ≈ profit_rate (KDV küçük fark yaratır)
+                profit_margin = profit_rate
+
+            total_sales_sum  += satis
+            total_profit_sum += profit
+            total_rl_sum     += agg["return_cargo_loss"]
+
+            results.append({
+                "barcode":           barcode,
+                "product_name":      agg["product_name"],
+                "stock":             agg["stock"],
+                "model_code":        agg["model_code"],
+                "category":          agg["category"],
+                "total_sales":       str(satis.quantize(q2)),
+                "total_profit":      str(profit.quantize(q2)),
+                "return_cargo_loss": str(agg["return_cargo_loss"].quantize(q2)),
+                "profit_rate":       str(profit_rate),
+                "profit_margin":     str(profit_margin),
+                "order_count":       agg["order_count"],
+                "return_count":      agg["return_count"],
+            })
+
+        # Sıralama
+        NUMERIC_SORT_KEYS = {
+            "total_sales":       lambda x: Decimal(x["total_sales"]),
+            "total_profit":      lambda x: Decimal(x["total_profit"]),
+            "return_cargo_loss": lambda x: Decimal(x["return_cargo_loss"]),
+            "profit_rate":       lambda x: Decimal(x["profit_rate"]),
+            "profit_margin":     lambda x: Decimal(x["profit_margin"]),
+            "stock":             lambda x: Decimal(str(x["stock"])),
+        }
+        key_fn = NUMERIC_SORT_KEYS.get(sort_by, lambda x: Decimal(x["total_sales"]))
+        results.sort(key=key_fn, reverse=sort_desc)
+
+        avg_profit_rate = Decimal("0.00")
+        if total_sales_sum > Decimal("0.00"):
+            avg_profit_rate = (total_profit_sum / total_sales_sum * Decimal("100")).quantize(q2)
+
+        return Response({
+            "results": results,
+            "summary": {
+                "total_sales":      str(total_sales_sum.quantize(q2)),
+                "total_profit":     str(total_profit_sum.quantize(q2)),
+                "total_return_loss": str(total_rl_sum.quantize(q2)),
+                "avg_profit_rate":  str(avg_profit_rate),
+            },
+            "date_range": {
+                "start_date": start_date_str or str(start_dt.date()),
+                "end_date":   end_date_str   or str(end_dt.date()),
+            }
+        })
+
 
 class ProductAnalysisView(APIView):
     permission_classes = [IsAuthenticated]

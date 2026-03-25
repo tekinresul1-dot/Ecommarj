@@ -34,16 +34,20 @@ python manage.py migrate --noinput
 echo "👤 Superuser kontrol ediliyor..."
 # Idempotent superuser creation
 python manage.py shell -c "
-import os
+import os, sys
 from django.contrib.auth import get_user_model
 User = get_user_model()
 username = os.environ.get('DJANGO_SUPERUSER_USERNAME', 'admin')
 email = os.environ.get('DJANGO_SUPERUSER_EMAIL', 'admin@ecommarj.local')
-password = os.environ.get('DJANGO_SUPERUSER_PASSWORD', 'admin123')
+password = os.environ.get('DJANGO_SUPERUSER_PASSWORD', '')
+
+if not password:
+    print('⚠️  DJANGO_SUPERUSER_PASSWORD env değişkeni tanımlı değil — superuser oluşturulmadı.')
+    sys.exit(0)
 
 if not User.objects.filter(username=username).exists():
     User.objects.create_superuser(username=username, email=email, password=password)
-    print(f'✅ Superuser ({username}) tazeleyici olarak oluşturuldu!')
+    print(f'✅ Superuser ({username}) oluşturuldu!')
 else:
     print(f'ℹ️  Superuser ({username}) zaten mevcut.')
 "

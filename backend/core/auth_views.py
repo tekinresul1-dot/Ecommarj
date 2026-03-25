@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .auth_serializers import RegisterSerializer, LoginSerializer, UserSerializer
-import random
+import secrets
 from django.core.cache import cache
 from django.core.mail import send_mail
 from django.conf import settings
@@ -55,7 +55,7 @@ class RegisterView(APIView):
         
         # Generate OTP for registration verification
         email = user.email.lower()
-        otp_code = str(random.randint(100000, 999999))
+        otp_code = f"{secrets.randbelow(900000) + 100000}"
         
         # Store OTP in cache for 10 minutes
         cache.set(f"otp_reg_{email}", otp_code, timeout=600)
@@ -155,7 +155,7 @@ class RegisterResendOTPView(APIView):
         if not User.objects.filter(email=email, is_active=False).exists():
             return Response({"error": "Doğrulama bekleyen kullanıcı bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
 
-        otp_code = str(random.randint(100000, 999999))
+        otp_code = f"{secrets.randbelow(900000) + 100000}"
         cache.set(f"otp_reg_{email}", otp_code, timeout=600)
         cache.set(f"otp_resend_cooldown_{email}", True, timeout=60)
 
@@ -240,7 +240,7 @@ class SendOTPView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        otp_code = str(random.randint(100000, 999999))
+        otp_code = f"{secrets.randbelow(900000) + 100000}"
         
         # ODK (OTP) cache'de 5 dakika tutulur
         cache.set(f"otp_{email}", otp_code, timeout=300)

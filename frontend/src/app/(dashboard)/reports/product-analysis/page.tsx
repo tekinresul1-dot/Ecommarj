@@ -188,9 +188,9 @@ export default function ProductAnalysisPage() {
 
   const thCls = (key: SortKey, align: "left" | "right" = "right") =>
     clsx(
-      "px-3 py-3 whitespace-nowrap cursor-pointer select-none hover:bg-orange-600/20 transition-colors",
+      "px-3 py-3 whitespace-nowrap cursor-pointer select-none hover:bg-white/5 transition-colors",
       align === "right" ? "text-right" : "text-left",
-      sortKey === key ? "text-orange-300" : ""
+      sortKey === key ? "text-blue-400" : ""
     );
 
   const fontSize = FONT_SIZES[fontSizeIdx].value;
@@ -221,7 +221,7 @@ export default function ProductAnalysisPage() {
                     className={clsx(
                       "w-full text-left px-4 py-2.5 text-sm transition-colors",
                       r.href === "/reports/product-analysis"
-                        ? "bg-orange-500/10 text-orange-300 font-medium"
+                        ? "bg-blue-500/10 text-blue-400 font-medium"
                         : "text-white/70 hover:bg-white/5 hover:text-white"
                     )}
                   >
@@ -238,7 +238,7 @@ export default function ProductAnalysisPage() {
           <DatePickerWithRange date={date} setDate={setDate} />
           <button
             onClick={fetchData}
-            className="flex items-center justify-center w-10 h-10 bg-orange-600 hover:bg-orange-500 text-white rounded-lg transition-colors shadow-lg shadow-orange-900/20"
+            className="flex items-center justify-center w-10 h-10 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors shadow-lg shadow-blue-900/20"
             title="Yenile"
           >
             <RefreshCw className="w-4 h-4" />
@@ -246,12 +246,12 @@ export default function ProductAnalysisPage() {
         </div>
       </div>
 
-      {/* ── Orange header bar ── */}
-      <div className="bg-orange-600 rounded-t-xl px-4 py-3 flex items-center justify-between">
+      {/* ── Header bar ── */}
+      <div className="bg-navy-800/50 border border-b-0 border-white/5 rounded-t-xl px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <span className="text-white font-bold text-base tracking-tight">Ürün Kârlılık Analizi</span>
           {!loading && (
-            <span className="text-orange-200 text-xs font-medium bg-orange-700/40 px-2 py-0.5 rounded-full">
+            <span className="text-white/60 text-xs font-medium bg-white/10 px-2 py-0.5 rounded-full">
               {sortedItems.length} ürün
             </span>
           )}
@@ -263,17 +263,17 @@ export default function ProductAnalysisPage() {
             className={clsx(
               "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border",
               showFilter || tableFilter
-                ? "bg-white/20 text-white border-white/30"
-                : "bg-orange-700/40 text-orange-100 border-orange-500/30 hover:bg-orange-700/60"
+                ? "bg-blue-600/20 text-blue-400 border-blue-500/30"
+                : "bg-navy-700/40 text-white/70 border-white/10 hover:bg-white/5"
             )}
           >
             <Filter className="w-3.5 h-3.5" />
             Filtrele
-            {tableFilter && <span className="w-1.5 h-1.5 rounded-full bg-white ml-0.5" />}
+            {tableFilter && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 ml-0.5" />}
           </button>
 
           {/* Font size controls */}
-          <div className="flex items-center border border-orange-500/30 rounded-lg overflow-hidden">
+          <div className="flex items-center border border-white/10 rounded-lg overflow-hidden">
             {FONT_SIZES.map((fs, i) => (
               <button
                 key={fs.label}
@@ -282,7 +282,7 @@ export default function ProductAnalysisPage() {
                   "px-2.5 py-1.5 text-xs font-bold transition-colors",
                   fontSizeIdx === i
                     ? "bg-white/20 text-white"
-                    : "text-orange-200 hover:bg-orange-700/40"
+                    : "text-white/50 hover:bg-white/10"
                 )}
               >
                 {fs.label}
@@ -293,7 +293,7 @@ export default function ProductAnalysisPage() {
           {/* Fullscreen */}
           <button
             onClick={toggleFullscreen}
-            className="flex items-center justify-center w-8 h-8 rounded-lg bg-orange-700/40 hover:bg-orange-700/60 text-orange-100 transition-colors border border-orange-500/30"
+            className="flex items-center justify-center w-8 h-8 rounded-lg bg-navy-700/40 hover:bg-white/10 text-white/70 transition-colors border border-white/10"
             title="Tam ekran"
           >
             <Maximize2 className="w-3.5 h-3.5" />
@@ -336,7 +336,7 @@ export default function ProductAnalysisPage() {
       >
         <div className="overflow-x-auto">
           <table className={clsx("w-full text-left text-white/80", fontSize)}>
-            <thead className="bg-orange-600/10 text-white border-b border-orange-500/20 uppercase text-[10px] tracking-wider font-semibold">
+            <thead className="bg-navy-800/50 text-white border-b border-light-navy uppercase text-[10px] tracking-wider font-semibold">
               <tr>
                 <th className={thCls("barcode", "left")} onClick={() => handleSort("barcode")}>
                   <span className="flex items-center gap-1">Barkod<ArrowUpDown className="w-3 h-3 opacity-50"/>{si("barcode")}</span>
@@ -378,7 +378,7 @@ export default function ProductAnalysisPage() {
                 <tr>
                   <td colSpan={11} className="px-6 py-10 text-center text-white/50">
                     <div className="flex justify-center items-center gap-3">
-                      <div className="w-5 h-5 border-2 border-orange-500 border-t-transparent rounded-full animate-spin" />
+                      <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
                       Veriler yükleniyor...
                     </div>
                   </td>
@@ -399,7 +399,7 @@ export default function ProductAnalysisPage() {
                   const marginVal  = parseFloat(item.profit_margin);
 
                   return (
-                    <tr key={`${item.barcode}-${idx}`} className="hover:bg-orange-500/5 transition-colors">
+                    <tr key={`${item.barcode}-${idx}`} className="hover:bg-white/5 transition-colors">
                       {/* Barkod */}
                       <td className="px-3 py-2.5 whitespace-nowrap">
                         <span className="font-mono text-xs text-white/50 bg-white/5 px-1.5 py-0.5 rounded">
@@ -410,7 +410,7 @@ export default function ProductAnalysisPage() {
                       {/* Ürün Adı */}
                       <td className="px-3 py-2.5 max-w-[200px]">
                         <button
-                          className="text-left font-medium text-white/90 hover:text-orange-300 transition-colors line-clamp-2 leading-tight"
+                          className="text-left font-medium text-white/90 hover:text-blue-400 transition-colors line-clamp-2 leading-tight"
                           title={item.product_name}
                           onClick={() => {/* future: navigate to product detail */}}
                         >

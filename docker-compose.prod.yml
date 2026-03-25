@@ -3,9 +3,23 @@
 
 services:
   backend:
+    # Production'da port 8000 dışarıya açılmaz — tüm trafik Nginx üzerinden geçer
+    ports: []
     environment:
       - DJANGO_DEBUG=False
       - POSTGRES_HOST=postgres
+
+  postgres:
+    # Production'da veritabanı portu dışarıya açılmaz
+    ports: []
+
+  redis:
+    # Production'da Redis portu dışarıya açılmaz (auth olmadan açık kalır)
+    ports: []
+
+  frontend:
+    # Production'da frontend portu dışarıya açılmaz — Nginx üzerinden servis edilir
+    ports: []
 
   nginx:
     ports:

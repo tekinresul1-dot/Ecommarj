@@ -50,7 +50,7 @@ class TrendyolOrderSyncService:
         self.account = account
         self.organization = account.organization
         self.client = TrendyolApiClient(
-            api_key=account.api_key,
+            api_key=decrypt_value(account.api_key),
             api_secret=decrypt_value(account.api_secret),
             seller_id=account.seller_id,
         )

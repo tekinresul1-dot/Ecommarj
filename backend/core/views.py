@@ -1907,8 +1907,8 @@ class ProductProfitabilityView(APIView):
             'items__transactions',
         )
 
-        # Delivered = satış sayılır; Returned/Cancelled/UnSupplied = iade kargo zararı
-        SOLD_STATUSES     = {"Delivered"}
+        # Aktif siparişler = satış sayılır; Returned/Cancelled/UnSupplied = iade kargo zararı
+        SOLD_STATUSES     = {"Created", "Picking", "Shipped", "Delivered", "UnDelivered"}
         RETURNED_STATUSES = {"Returned", "Cancelled", "UnSupplied"}
 
         # barcode → aggregated data

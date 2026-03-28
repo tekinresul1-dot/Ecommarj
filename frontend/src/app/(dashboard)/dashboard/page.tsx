@@ -56,7 +56,7 @@ function DashboardContent() {
     setSyncing(true);
     try {
       await api.post("/sync/run/", {});
-      setLastSync(new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' }));
+      setLastSync(new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Istanbul' }));
       // Sync done — refresh dashboard data
       await fetchData();
     } catch (err) {

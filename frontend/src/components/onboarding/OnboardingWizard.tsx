@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { api } from "@/lib/api";
 
 export default function OnboardingWizard({ 
@@ -28,6 +28,11 @@ export default function OnboardingWizard({
 
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
+    const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    useEffect(() => {
+        return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    }, []);
 
     async function updateStatus(newStatus: string) {
         try {
@@ -85,10 +90,32 @@ export default function OnboardingWizard({
                 auto_sync: true
             });
 
-            await updateStatus("COMPLETED");
+            // Move to syncing screen immediately — don't block on the sync itself
+            await updateStatus("SYNCING");
             setStep(3);
-            setTimeout(() => {
-                onComplete();
+            setLoading(false);
+
+            // Poll /dashboard/sync-status/ every 3s until data appears (max 90s)
+            let attempts = 0;
+            pollRef.current = setInterval(async () => {
+                attempts++;
+                try {
+                    const status: any = await api.get("/dashboard/sync-status/");
+                    const hasSyncData = status?.logs?.length > 0 || status?.sync_status === "ready";
+                    if (hasSyncData) {
+                        clearInterval(pollRef.current!);
+                        await updateStatus("COMPLETED");
+                        setTimeout(() => onComplete(), 2000);
+                        return;
+                    }
+                } catch (_) { /* ignore polling errors */ }
+
+                if (attempts >= 30) {
+                    // 90s timeout — sync continues in background, move user forward
+                    clearInterval(pollRef.current!);
+                    await updateStatus("COMPLETED");
+                    onComplete();
+                }
             }, 3000);
         } catch (err: any) {
             setError(err.message || "Kaydetme sırasında hata oluştu.");
@@ -237,16 +264,17 @@ export default function OnboardingWizard({
                                 <div className="absolute inset-0 rounded-full border-[6px] border-t-accent-500 animate-spin"></div>
                                 <div className="absolute inset-4 rounded-full bg-accent-500/5 animate-pulse"></div>
                             </div>
-                            <h2 className="text-2xl font-bold text-white mb-3">Sihir Gerçekleşiyor...</h2>
+                            <h2 className="text-2xl font-bold text-white mb-3">Veriler Çekiliyor...</h2>
                             <p className="text-white/60 text-base leading-relaxed">
-                                Siparişleriniz arka planda kârlılık <br/>
-                                motorumuzdan geçiriliyor.
+                                Ürünleriniz ve siparişleriniz arka planda <br/>
+                                senkronize ediliyor. Bu birkaç dakika sürebilir.
                             </p>
                             <div className="mt-8 flex justify-center gap-1.5">
                                 <div className="w-2 h-2 rounded-full bg-accent-500 animate-bounce [animation-delay:-0.3s]"></div>
                                 <div className="w-2 h-2 rounded-full bg-accent-500 animate-bounce [animation-delay:-0.15s]"></div>
                                 <div className="w-2 h-2 rounded-full bg-accent-500 animate-bounce"></div>
                             </div>
+                            <p className="text-white/30 text-xs mt-6">Sizi otomatik olarak yönlendireceğiz...</p>
                         </div>
                     )}
                 </div>

@@ -59,16 +59,15 @@ class TriggerSyncView(APIView):
         if not accounts.exists():
             return Response({"error": "Aktif bir Trendyol API hesabı bulunamadı."}, status=404)
             
+        task_ids = []
         for acc in accounts:
-            try:
-                # Run synchronously for MVP/Testing instead of celery
-                sync_all_trendyol_data_task(str(acc.id))
-            except ValueError as e:
-                return Response({"error": str(e)}, status=400)
-            except Exception as e:
-                return Response({"error": f"Senkronizasyon sırasında hata oluştu: {str(e)}"}, status=500)
-            
-        return Response({"message": f"{accounts.count()} hesap için senkronizasyon başarıyla tamamlandı."})
+            task = sync_all_trendyol_data_task.delay(str(acc.id))
+            task_ids.append(task.id)
+
+        return Response({
+            "message": f"{accounts.count()} hesap için senkronizasyon başlatıldı.",
+            "task_ids": task_ids,
+        })
 
 
 class ProductStockSyncView(APIView):
@@ -583,22 +582,15 @@ class TrendyolSaveCredentialsView(APIView):
         )
 
         auto_sync = request.data.get("auto_sync", True)
-        sync_result = None
+        task_id = None
         if auto_sync and account.api_key and account.api_secret:
-            try:
-                sync_all_trendyol_data_task(str(account.id))
-                sync_result = "success"
-            except ValueError as e:
-                # Credentials saved but sync failed (e.g. Cloudflare block)
-                # Don't fail — let user know credentials are saved
-                sync_result = f"sync_failed: {str(e)}"
-            except Exception as e:
-                sync_result = f"sync_error: {str(e)}"
+            task = sync_all_trendyol_data_task.delay(str(account.id))
+            task_id = task.id
 
         return Response({
             "message": "Trendyol API bilgileri başarıyla kaydedildi.",
             "sync_started": auto_sync,
-            "sync_result": sync_result,
+            "task_id": task_id,
         })
 
 

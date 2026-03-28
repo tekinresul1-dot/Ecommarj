@@ -33,18 +33,28 @@ class RegisterView(APIView):
         serializer = RegisterSerializer(data=request.data)
         if not serializer.is_valid():
             # Check for structured error in the email field
+            # DRF may return a list or dict depending on ValidationError detail type
             email_errors = serializer.errors.get("email")
-            if email_errors and isinstance(email_errors, list) and isinstance(email_errors[0], dict):
-                error_info = email_errors[0]
-                return Response(
-                    {
-                        "error_code": error_info.get("code", "VALIDATION_ERROR"),
-                        "message": error_info.get("message", "Giriş yapılamadı."),
-                        "next_action": error_info.get("next_action"),
-                        "errors": serializer.errors
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+            if email_errors:
+                if isinstance(email_errors, list) and email_errors and isinstance(email_errors[0], dict):
+                    raw = email_errors[0]
+                elif isinstance(email_errors, dict):
+                    raw = email_errors
+                else:
+                    raw = None
+
+                if raw:
+                    error_info = raw.get("email", raw) if isinstance(raw, dict) else raw
+                    if isinstance(error_info, dict) and error_info.get("code"):
+                        return Response(
+                            {
+                                "error_code": error_info.get("code", "VALIDATION_ERROR"),
+                                "message": error_info.get("message", "Doğrulama hatası oluştu."),
+                                "next_action": error_info.get("next_action"),
+                                "errors": serializer.errors
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
 
             return Response(
                 {"error_code": "VALIDATION_ERROR", "errors": serializer.errors},

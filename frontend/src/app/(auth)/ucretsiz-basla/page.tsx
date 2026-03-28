@@ -90,11 +90,31 @@ export default function RegisterPage() {
         } catch (error: any) {
             const data = error.data;
             if (data && data.error_code) {
-                setErrorDetail({
-                    code: data.error_code,
-                    message: data.message,
-                    nextAction: data.next_action,
-                });
+                // Structured error (e.g. email already exists)
+                if (data.message && data.error_code !== "VALIDATION_ERROR") {
+                    setErrorDetail({
+                        code: data.error_code,
+                        message: data.message,
+                        nextAction: data.next_action,
+                    });
+                } else if (data.errors) {
+                    // Field-level validation errors from backend — show under each field
+                    const fieldErrors: Record<string, string> = {};
+                    for (const [field, msgs] of Object.entries(data.errors as Record<string, any[]>)) {
+                        const first = msgs[0];
+                        if (typeof first === "string") fieldErrors[field] = first;
+                        else if (typeof first === "object" && first !== null) {
+                            const inner = first.email || first.message || first.detail || Object.values(first)[0];
+                            fieldErrors[field] = typeof inner === "string" ? inner : JSON.stringify(inner);
+                        }
+                    }
+                    if (data.message) {
+                        setErrorDetail({ code: data.error_code, message: data.message, nextAction: data.next_action });
+                    }
+                    setErrors(prev => ({ ...prev, ...fieldErrors }));
+                } else {
+                    showToast(data.message || error.message || "Sunucuya bağlanılamadı.", "error");
+                }
             } else {
                 showToast(error.message || "Sunucuya bağlanılamadı. Lütfen tekrar deneyin.", "error");
             }

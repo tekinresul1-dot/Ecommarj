@@ -65,10 +65,11 @@ class RegisterSerializer(serializers.Serializer):
         
         user = User.objects.filter(email=email).first()
         if user:
-            # Update existing inactive user
+            # Update existing user (e.g. previously unverified)
             user.set_password(validated_data["password"])
             user.first_name = first_name
             user.last_name = last_name
+            user.is_active = True
             user.save()
         else:
             # Create new user
@@ -78,7 +79,7 @@ class RegisterSerializer(serializers.Serializer):
                 password=validated_data["password"],
                 first_name=first_name,
                 last_name=last_name,
-                is_active=False,
+                is_active=True,
             )
 
         # Handle Organization and Profile

@@ -62,32 +62,13 @@ class RegisterView(APIView):
             )
 
         user = serializer.save()
-        
-        # Generate OTP for registration verification
-        email = user.email.lower()
-        otp_code = f"{secrets.randbelow(900000) + 100000}"
-        
-        # Store OTP in cache for 10 minutes
-        cache.set(f"otp_reg_{email}", otp_code, timeout=600)
-        
-        # Send OTP email
-        subject = "EcomMarj Hesap Doğrulama Kodu"
-        message = f"EcomMarj hesabınızı doğrulamak için kodunuz: {otp_code}\n\nBu kod 10 dakika boyunca geçerlidir."
-        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "info@ecommarj.com")
-        
-        try:
-            send_mail(subject, message, from_email, [email], fail_silently=False)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"Registration OTP email failed ({email}): {e}")
-            # We still return success as the user is created, but warn about email failure?
-            # Or perhaps delete user and return error? 
-            # Given requirements, let's just log and continue, user can 'resend'.
+        tokens = _get_tokens_for_user(user)
 
         return Response(
             {
-                "message": "Hesap oluşturuldu. Lütfen e-posta adresinize gönderilen doğrulama kodunu girin.",
-                "email": email,
+                "message": "Hesap oluşturuldu.",
+                "user": UserSerializer(user).data,
+                "tokens": tokens,
             },
             status=status.HTTP_201_CREATED,
         )

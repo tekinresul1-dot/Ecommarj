@@ -32,9 +32,10 @@ export default function ProductSettingsPage() {
     try {
       setIsLoading(true);
       const res: any = await api.get(`/products/?page=${currentPage}&search=${search}`);
-      if (res && res.results) {
-        setProducts(res.results);
-        setTotalCount(res.count || 0);
+      const resData = res?.data || res;
+      if (resData && resData.results) {
+        setProducts(resData.results);
+        setTotalCount(resData.count || 0);
       }
     } catch (error: any) {
       console.error("Products fetch error:", error);

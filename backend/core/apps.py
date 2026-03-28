@@ -5,3 +5,7 @@ class CoreConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "core"
     verbose_name = "EcomMarj Core"
+
+    def ready(self):
+        from core.signals import connect_signals
+        connect_signals()

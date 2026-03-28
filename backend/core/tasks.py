@@ -162,6 +162,23 @@ def trendyol_reconciliation_all_accounts():
     return f"Dispatched {dispatched} reconciliation tasks"
 
 
+@shared_task
+def trendyol_product_sync_all_accounts():
+    """
+    Tüm aktif Trendyol hesapları için ürün senkronizasyonu başlatır.
+    Günde bir kez çalışır — ürün fiyat/stok/komisyon değişikliklerini yakalar.
+    """
+    from core.models import MarketplaceAccount
+    from core.tasks import sync_all_trendyol_data_task
+    accounts = MarketplaceAccount.objects.filter(is_active=True, channel="trendyol")
+    dispatched = 0
+    for account in accounts:
+        sync_all_trendyol_data_task.delay(str(account.id))
+        dispatched += 1
+    logger.info(f"[Beat] Product sync dispatched for {dispatched} accounts")
+    return f"Dispatched {dispatched} product syncs"
+
+
 # Legacy task - still used by existing sync trigger views
 @shared_task
 def sync_all_trendyol_data_task(account_id: str):

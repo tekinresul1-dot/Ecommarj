@@ -224,7 +224,7 @@ class TrendyolAdapter:
                 while page < 10:
                     params["page"] = page
                     response = self._make_request(url, params, operation=op_name)
-                    if response.status_code in (404, 556, 503):
+                    if response.status_code in (404, 502, 503, 556):
                         logger.warning(f"[Trendyol {op_name}] Unavailable ({response.status_code}), trying next URL.")
                         break
                     response.raise_for_status()
@@ -252,13 +252,19 @@ class TrendyolAdapter:
     # ------------------------------------------------------------------
     def fetch_financials(self, start_date_ms: int = None, end_date_ms: int = None) -> List[Dict[Any, Any]]:
         """Cari / Hakediş (Settlements) finansal verilerini çeker."""
+        import time as _t
         url = f"{self.BASE_URL}/finance/sellers/{self.seller_id}/settlements"
-        params = {"size": 100}
 
-        if start_date_ms:
-            params["startDate"] = start_date_ms
-        if end_date_ms:
-            params["endDate"] = end_date_ms
+        # Trendyol settlements API requires a date range — default to last 30 days
+        if not start_date_ms or not end_date_ms:
+            end_date_ms = end_date_ms or int(_t.time() * 1000)
+            start_date_ms = start_date_ms or (end_date_ms - 30 * 24 * 60 * 60 * 1000)
+
+        params = {
+            "size": 100,
+            "startDate": start_date_ms,
+            "endDate": end_date_ms,
+        }
 
         all_content = []
         page = 0
@@ -266,12 +272,12 @@ class TrendyolAdapter:
             while page < 5:
                 params["page"] = page
                 response = self._make_request(url, params, operation="Settlements")
-                
-                # Settlements API might not be available (556)
-                if response.status_code == 556:
-                    logger.warning("[Trendyol Settlements] Service unavailable (556). Skipping.")
+
+                # Non-success statuses — skip gracefully
+                if response.status_code in (502, 503, 556):
+                    logger.warning(f"[Trendyol Settlements] Service unavailable ({response.status_code}). Skipping.")
                     return []
-                
+
                 response.raise_for_status()
                 data = response.json()
                 content = data.get("content", [])
@@ -280,8 +286,11 @@ class TrendyolAdapter:
                     break
 
                 all_content.extend(content)
+                total_pages = data.get("totalPages", 1)
+                if page >= total_pages - 1:
+                    break
                 page += 1
-            
+
             logger.info(f"[Trendyol Settlements] Fetched {len(all_content)} items")
             return all_content
 
@@ -305,11 +314,12 @@ class TrendyolAdapter:
             while page < 5:
                 params["page"] = page
                 response = self._make_request(url, params, operation="OtherFinancials")
-                
-                if response.status_code == 556:
-                    logger.warning("[Trendyol OtherFinancials] Service unavailable (556). Skipping.")
+
+                # Non-success statuses — skip gracefully (TGO domain may be blocked/unavailable)
+                if response.status_code in (502, 503, 556):
+                    logger.warning(f"[Trendyol OtherFinancials] Service unavailable ({response.status_code}). Skipping.")
                     return []
-                
+
                 response.raise_for_status()
                 data = response.json()
                 content = data.get("content", [])

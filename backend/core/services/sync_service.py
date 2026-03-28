@@ -459,8 +459,12 @@ class TrendyolSyncService:
         Her settlement satırı bir FinancialTransaction'a dönüştürülür.
         """
         logger.info("Fetching settlements...")
+        end_date = timezone.now()
+        start_date = end_date - timedelta(days=30)
+        start_ms = int(start_date.timestamp() * 1000)
+        end_ms = int(end_date.timestamp() * 1000)
         try:
-            settlements_data = self.adapter.fetch_financials()
+            settlements_data = self.adapter.fetch_financials(start_ms, end_ms)
         except Exception as e:
             logger.warning(f"Settlements fetch failed (non-critical): {e}")
             return

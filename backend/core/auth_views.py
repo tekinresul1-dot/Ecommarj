@@ -228,6 +228,9 @@ class SendOTPView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        import logging
+        logger = logging.getLogger(__name__)
+
         email = request.data.get("email")
         if not email:
             return Response({"error": "E-posta gereklidir."}, status=status.HTTP_400_BAD_REQUEST)
@@ -241,28 +244,38 @@ class SendOTPView(APIView):
             )
 
         otp_code = f"{secrets.randbelow(900000) + 100000}"
-        
-        # ODK (OTP) cache'de 5 dakika tutulur
-        cache.set(f"otp_{email}", otp_code, timeout=300)
-        
+
+        # OTP'yi cache'e yaz (Redis). Başarısız olursa 503 dön.
+        try:
+            cache.set(f"otp_{email}", otp_code, timeout=300)
+        except Exception as e:
+            logger.exception(f"[SendOTP] Redis/cache hatası ({email}): {e}")
+            return Response(
+                {"error": "Sistem geçici olarak kullanılamıyor. Lütfen tekrar deneyin."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
         # E-posta gönderme
         subject = "EcomMarj Doğrulama Kodu"
         message = f"Giriş yapmak için doğrulama kodunuz: {otp_code}\n\nBu kod 5 dakika boyunca geçerlidir."
         from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "info@ecommarj.com")
-        
+
         try:
             send_mail(subject, message, from_email, [email], fail_silently=False)
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"OTP e-posta gönderilemedi ({email}): {e}")
+            logger.exception(f"[SendOTP] SMTP e-posta gönderilemedi ({email}): {e}")
             return Response(
                 {"error": "E-posta gönderilemedi. Lütfen daha sonra tekrar deneyin."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
         # Reset retry count if resending code
-        cache.delete(f"otp_retry_{email}")
+        try:
+            cache.delete(f"otp_retry_{email}")
+        except Exception:
+            pass  # non-critical
 
+        logger.info(f"[SendOTP] OTP başarıyla gönderildi: {email}")
         return Response({"message": "Doğrulama kodu e-posta adresinize gönderildi."}, status=status.HTTP_200_OK)
 
 
@@ -272,6 +285,9 @@ class VerifyOTPView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        import logging
+        logger = logging.getLogger(__name__)
+
         email = request.data.get("email")
         otp = request.data.get("otp")
         
@@ -279,26 +295,43 @@ class VerifyOTPView(APIView):
             return Response({"error": "E-posta ve kod gereklidir."}, status=status.HTTP_400_BAD_REQUEST)
             
         email = email.lower()
-        cached_otp = cache.get(f"otp_{email}")
+
+        try:
+            cached_otp = cache.get(f"otp_{email}")
+        except Exception as e:
+            logger.exception(f"[VerifyOTP] Redis/cache hatası ({email}): {e}")
+            return Response(
+                {"error": "Sistem geçici olarak kullanılamıyor. Lütfen tekrar deneyin."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         # Brute-force protection: Check retry count
         retry_key = f"otp_login_retry_{email}"
-        retries = cache.get(retry_key, 0)
+        try:
+            retries = cache.get(retry_key, 0)
+        except Exception:
+            retries = 0
+
         if retries >= 5:
-            cache.delete(f"otp_{email}")
+            try:
+                cache.delete(f"otp_{email}")
+            except Exception:
+                pass
             return Response({"error": "Çok fazla hatalı deneme. Yeni bir kod istemeniz gerekiyor."}, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
         # Master OTP Safe Guard
         is_master_otp = str(otp) == "000000"
         if is_master_otp:
             if settings.DEBUG:
-                import logging
-                logging.getLogger(__name__).info(f"Master login OTP used for {email} in DEBUG mode.")
+                logger.info(f"Master login OTP used for {email} in DEBUG mode.")
             else:
                 is_master_otp = False
 
-        if cached_otp != otp and not is_master_otp:
-            cache.set(retry_key, retries + 1, timeout=300)
+        if cached_otp != str(otp) and not is_master_otp:
+            try:
+                cache.set(retry_key, retries + 1, timeout=300)
+            except Exception:
+                pass
             return Response({"error": "Geçersiz veya süresi dolmuş kod."}, status=status.HTTP_401_UNAUTHORIZED)
             
         # Kullanıcıyı bul — yeni kullanıcı yaratma (güvenlik: sadece kayıtlı+aktif kullanıcılar)
@@ -308,7 +341,10 @@ class VerifyOTPView(APIView):
             return Response({"error": "Kullanıcı bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
         
         # Cache'i temizle
-        cache.delete(f"otp_{email}")
+        try:
+            cache.delete(f"otp_{email}")
+        except Exception:
+            pass
         
         tokens = _get_tokens_for_user(user)
         

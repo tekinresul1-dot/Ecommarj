@@ -95,27 +95,39 @@ class TrendyolApiClient:
                 
                 # Rate limit → wait and retry
                 if response.status_code == 429:
-                    wait = RETRY_BACKOFF_BASE ** attempt
+                    wait = RETRY_BACKOFF_BASE ** attempt * 5
                     logger.warning(f"[Trendyol {operation}] Rate limited (429). Waiting {wait}s...")
                     time.sleep(wait)
                     continue
-                
+
+                # Trendyol sometimes returns 401 for transient rate-limit throttling
+                # (non-standard but observed in production). Retry with backoff before
+                # treating as a real auth failure.
+                if response.status_code == 401 and attempt < MAX_RETRIES:
+                    wait = RETRY_BACKOFF_BASE ** attempt * 3
+                    logger.warning(
+                        f"[Trendyol {operation}] 401 Unauthorized (possibly transient). "
+                        f"Retry {attempt}/{MAX_RETRIES} in {wait}s..."
+                    )
+                    time.sleep(wait)
+                    continue
+
                 # Service unavailable → retry
                 if response.status_code in (502, 503, 504, 556):
                     wait = RETRY_BACKOFF_BASE ** attempt
                     logger.warning(f"[Trendyol {operation}] Server error {response.status_code}. Waiting {wait}s...")
                     time.sleep(wait)
                     continue
-                
+
                 response.raise_for_status()
                 return response
-                
+
             except requests.exceptions.ConnectionError as e:
                 last_exception = e
                 wait = RETRY_BACKOFF_BASE ** attempt
                 logger.warning(f"[Trendyol {operation}] Connection error. Retry in {wait}s. Error: {e}")
                 time.sleep(wait)
-                
+
             except requests.exceptions.Timeout as e:
                 last_exception = e
                 wait = RETRY_BACKOFF_BASE ** attempt
@@ -243,6 +255,10 @@ class TrendyolApiClient:
                 url, params, operation=f"Orders chunk {i}/{len(chunks)}"
             )
             all_orders.extend(chunk_orders)
+
+            # Brief pause between chunks to avoid triggering Trendyol's rate limit
+            if i < len(chunks):
+                time.sleep(0.3)
 
         logger.info(f"[Trendyol Orders] Total fetched: {len(all_orders)} orders across {len(chunks)} chunks")
         return all_orders

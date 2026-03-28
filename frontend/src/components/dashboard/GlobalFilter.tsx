@@ -37,6 +37,7 @@ export function GlobalFilter() {
 
     // Tarih seçimi state'i
     const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+    const defaultsApplied = useRef(false);
 
     useEffect(() => {
         const c = searchParams.get("countries");
@@ -50,6 +51,19 @@ export function GlobalFilter() {
                 from: parseISO(min_date),
                 to: parseISO(max_date),
             });
+        } else if (!defaultsApplied.current) {
+            // İlk açılışta tarih seçilmemişse son 30 günü varsayılan olarak ayarla
+            defaultsApplied.current = true;
+            const today = new Date();
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(today.getDate() - 30);
+            const defaultFrom = format(thirtyDaysAgo, "yyyy-MM-dd");
+            const defaultTo = format(today, "yyyy-MM-dd");
+            setDateRange({ from: thirtyDaysAgo, to: today });
+            const params = new URLSearchParams(searchParams.toString());
+            params.set("min_date", defaultFrom);
+            params.set("max_date", defaultTo);
+            router.replace(pathname + "?" + params.toString());
         }
     }, [searchParams]);
 

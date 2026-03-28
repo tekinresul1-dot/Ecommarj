@@ -213,15 +213,8 @@ class TrendyolApiClient:
         Enforces Trendyol's maximum 30-day fetch limit.
         """
         # Trendyol API limit: Max 30 days query range (Update March 2026)
-        delta_days = (end_date - start_date).days
-        if delta_days > 30:
-            logger.warning(
-                f"[Trendyol Orders] Date range too large ({delta_days} days). "
-                f"Trendyol API limits queries to max 30 days. "
-                f"Auto-adjusting start_date to 30 days prior to end_date."
-            )
-            start_date = end_date - timedelta(days=30)
-            
+        # We handle this by using _chunk_date_range with 3-day windows.
+        # Removed the 30-day overall limit that clipped start_date.
         url = f"{self.BASE_URL}/order/sellers/{self.seller_id}/orders"
         
         chunks = _chunk_date_range(start_date, end_date)

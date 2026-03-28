@@ -470,7 +470,7 @@ class TrendyolTestConnectionView(APIView):
             # Debug: Log response info
             request_id = res.headers.get("x-request-id", "N/A")
             logger.info(f"[TestConnection] Status: {res.status_code}, x-request-id: {request_id}")
-            logger.info(f"[TestConnection] Response body preview: {res.text[:200]}")
+            logger.info(f"[TestConnection] Response body: {res.text}")
             
             if not res.ok:
                 text = res.text
@@ -1222,16 +1222,17 @@ class ReturnAnalysisView(APIView):
             return_to_sales_ratio = round(total_return_revenue_loss / total_sales_amount * Decimal("100"), 2)
 
         return Response({
-            "ok": True,
-            "summary": {
-                "total_orders": total_order_count,
-                "returned_orders": returned_order_count,
-                "return_rate": str(return_rate),
-                "total_return_cargo_loss": str(total_return_cargo_loss),
-                "total_return_revenue_loss": str(total_return_revenue_loss),
-                "return_to_sales_ratio": str(return_to_sales_ratio),
-            },
-            "data": product_returns
+            "data": {
+                "summary": {
+                    "total_orders": total_order_count,
+                    "returned_orders": returned_order_count,
+                    "return_rate": str(return_rate),
+                    "total_return_cargo_loss": str(total_return_cargo_loss),
+                    "total_return_revenue_loss": str(total_return_revenue_loss),
+                    "return_to_sales_ratio": str(return_to_sales_ratio),
+                },
+                "data": product_returns,
+            }
         })
 
 

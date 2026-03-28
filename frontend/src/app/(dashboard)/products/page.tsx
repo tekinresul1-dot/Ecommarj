@@ -98,8 +98,9 @@ export default function ProductsPage() {
         setIsLoading(true);
         try {
             const res: any = await api.get(`/products/?page=${currentPage}&search=${search}`);
-            setProducts(res.results || []);
-            setTotalCount(res.count || 0);
+            const resData = res?.data || res;
+            setProducts(resData.results || []);
+            setTotalCount(resData.count || 0);
         } catch (error) {
             console.error("Failed to load products:", error);
             toast.error("Ürünler yüklenemedi.");

@@ -40,7 +40,8 @@ STATUS_MAP = {
 }
 
 # Default total_days for full sync
-FULL_SYNC_DAYS = 365
+# 180 days keeps enough history while minimizing API call volume per sync
+FULL_SYNC_DAYS = 180
 
 
 class TrendyolOrderSyncService:

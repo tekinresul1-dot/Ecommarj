@@ -75,7 +75,7 @@ export default function RegisterPage() {
 
         setIsLoading(true);
         try {
-            await api.post("/auth/register/", {
+            const data = await api.post("/auth/register/", {
                 full_name: form.name,
                 email: form.email,
                 password: form.password,
@@ -85,8 +85,12 @@ export default function RegisterPage() {
                 kvkk_terms_accepted: form.kvkk,
             });
 
-            showToast("Hesap oluşturuldu! Lütfen e-postanıza gönderilen kodu doğrulayın.", "success");
-            setTimeout(() => router.push(`/dogrulama?email=${encodeURIComponent(form.email)}`), 1500);
+            localStorage.setItem("access_token", data.tokens.access);
+            localStorage.setItem("refresh_token", data.tokens.refresh);
+            localStorage.setItem("user", JSON.stringify(data.user));
+
+            showToast("Hesap oluşturuldu! Yönlendiriliyorsunuz...", "success");
+            setTimeout(() => router.push("/dashboard"), 1500);
         } catch (error: any) {
             const data = error.data;
             if (data && data.error_code) {

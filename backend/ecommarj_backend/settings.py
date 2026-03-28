@@ -314,6 +314,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.trendyol_reconciliation_all_accounts",
         "schedule": crontab(minute=0, hour="*/6"),
     },
+    # Günde bir kez tüm hesaplar için ürün sync (fiyat/stok/komisyon güncellemeleri)
+    "trendyol-product-sync-all": {
+        "task": "core.tasks.trendyol_product_sync_all_accounts",
+        "schedule": crontab(minute=0, hour=3),  # Her gece 03:00
+    },
 }
 
 # ---------------------------------------------------------------------------

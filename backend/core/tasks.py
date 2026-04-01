@@ -179,6 +179,35 @@ def trendyol_product_sync_all_accounts():
     return f"Dispatched {dispatched} product syncs"
 
 
+@shared_task(bind=True, max_retries=2, default_retry_delay=60)
+def trendyol_ad_expense_sync(self, account_id: int, days_back: int = 30):
+    """Trendyol reklam giderlerini senkronize eder."""
+    try:
+        account = MarketplaceAccount.objects.get(id=account_id, is_active=True)
+        from core.services.ad_expense_sync import TrendyolAdExpenseSyncService
+        svc = TrendyolAdExpenseSyncService(account)
+        result = svc.sync(days_back=days_back)
+        return f"OK: inserted={result['inserted']} updated={result['updated']}"
+    except MarketplaceAccount.DoesNotExist:
+        return "Error: Account not found"
+    except Exception as e:
+        logger.error(f"Ad expense sync failed for {account_id}: {e}")
+        raise self.retry(exc=e)
+
+
+@shared_task
+def trendyol_ad_expense_sync_all_accounts():
+    """Tüm aktif Trendyol hesapları için reklam gider senkronizasyonu."""
+    from core.models import MarketplaceAccount
+    accounts = MarketplaceAccount.objects.filter(is_active=True, channel="trendyol")
+    dispatched = 0
+    for account in accounts:
+        trendyol_ad_expense_sync.delay(account.id)
+        dispatched += 1
+    logger.info(f"[Beat] Ad expense sync dispatched for {dispatched} accounts")
+    return f"Dispatched {dispatched} ad expense syncs"
+
+
 # Legacy task - still used by existing sync trigger views
 @shared_task
 def sync_all_trendyol_data_task(account_id: str):

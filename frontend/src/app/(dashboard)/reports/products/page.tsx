@@ -286,7 +286,20 @@ export default function ProductProfitabilityPage() {
       {/* Table */}
       <div className="bg-navy-900 rounded-xl border border-white/5 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm text-white/80">
+          <table className="w-full table-fixed text-[13px] text-left text-white/80">
+            <colgroup>
+              <col style={{ width: "120px" }} />  {/* Barkod */}
+              <col />                              {/* Ürün Adı — kalan alan */}
+              <col style={{ width: "70px" }} />   {/* Stok */}
+              <col style={{ width: "130px" }} />  {/* Model Kodu */}
+              <col style={{ width: "130px" }} />  {/* Kategori */}
+              <col style={{ width: "90px" }} />   {/* Satış Adedi */}
+              <col style={{ width: "110px" }} />  {/* Satış Tutarı */}
+              <col style={{ width: "110px" }} />  {/* Kâr Tutarı */}
+              <col style={{ width: "100px" }} />  {/* İade Kargo Zararı */}
+              <col style={{ width: "90px" }} />   {/* Kâr Oranı */}
+              <col style={{ width: "90px" }} />   {/* Kâr Marjı */}
+            </colgroup>
             <thead className="bg-navy-800/50 text-white border-b border-white/5 uppercase text-[10px] tracking-wider font-semibold">
               <tr>
                 {COLUMNS.map((col) => (
@@ -294,7 +307,7 @@ export default function ProductProfitabilityPage() {
                     key={col.key}
                     onClick={() => handleSort(col.key)}
                     className={clsx(
-                      "px-4 py-4 whitespace-nowrap cursor-pointer select-none",
+                      "px-2 py-2 whitespace-nowrap cursor-pointer select-none",
                       "hover:bg-white/5 transition-colors",
                       col.align === "right" && "text-right"
                     )}
@@ -335,12 +348,12 @@ export default function ProductProfitabilityPage() {
                   return (
                     <tr key={item.barcode} className="hover:bg-white/5 transition-colors group">
                       {/* Barkod */}
-                      <td className="px-4 py-3 whitespace-nowrap font-mono text-xs text-white/70">
-                        {item.barcode}
+                      <td className="px-2 py-1.5 font-mono text-xs text-white/70 overflow-hidden">
+                        <span className="truncate block" title={item.barcode}>{item.barcode}</span>
                       </td>
 
                       {/* Ürün Adı */}
-                      <td className="px-4 py-3 min-w-[200px] max-w-[280px]">
+                      <td className="px-2 py-1.5 overflow-hidden">
                         <span
                           className="truncate block text-white/90 group-hover:text-white cursor-pointer hover:text-blue-400 transition-colors"
                           title={item.title}
@@ -354,53 +367,57 @@ export default function ProductProfitabilityPage() {
                       </td>
 
                       {/* Stok */}
-                      <td className="px-4 py-3 whitespace-nowrap text-right text-white/70">
+                      <td className="px-2 py-1.5 text-right text-white/70 whitespace-nowrap">
                         {item.stock.toLocaleString("tr-TR")}
                       </td>
 
                       {/* Model Kodu */}
-                      <td className="px-4 py-3 whitespace-nowrap text-white/60 text-xs">
-                        {item.model_code || <span className="text-white/30">—</span>}
+                      <td className="px-2 py-1.5 text-white/60 overflow-hidden">
+                        <span className="truncate block" title={item.model_code}>
+                          {item.model_code || <span className="text-white/30">—</span>}
+                        </span>
                       </td>
 
                       {/* Kategori */}
-                      <td className="px-4 py-3 whitespace-nowrap text-white/60 max-w-[160px] truncate" title={item.category}>
-                        {item.category || <span className="text-white/30">—</span>}
+                      <td className="px-2 py-1.5 text-white/60 overflow-hidden">
+                        <span className="truncate block" title={item.category}>
+                          {item.category || <span className="text-white/30">—</span>}
+                        </span>
                       </td>
 
                       {/* Satış Adedi */}
-                      <td className="px-4 py-3 whitespace-nowrap text-right font-medium text-blue-400">
+                      <td className="px-2 py-1.5 text-right font-medium text-blue-400 whitespace-nowrap">
                         {item.total_sold_quantity.toLocaleString("tr-TR")}
                       </td>
 
                       {/* Satış Tutarı */}
-                      <td className="px-4 py-3 whitespace-nowrap text-right font-medium text-white/80">
+                      <td className="px-2 py-1.5 text-right font-medium text-white/80 whitespace-nowrap">
                         {formatCurrency(parseFloat(item.total_sales_amount))}
                       </td>
 
                       {/* Kâr Tutarı */}
-                      <td className="px-4 py-3 whitespace-nowrap text-right">
+                      <td className="px-2 py-1.5 text-right whitespace-nowrap">
                         <span className={clsx("font-bold", isProfit ? "text-green-400" : isLoss ? "text-red-400" : "text-white/80")}>
                           {formatCurrency(profitVal)}
                         </span>
                       </td>
 
                       {/* İade Kargo Zararı */}
-                      <td className="px-4 py-3 whitespace-nowrap text-right">
+                      <td className="px-2 py-1.5 text-right whitespace-nowrap">
                         <span className={clsx("font-medium", lossVal > 0 ? "text-red-400" : "text-white/40")}>
                           {lossVal > 0 ? `-${formatCurrency(lossVal)}` : "—"}
                         </span>
                       </td>
 
                       {/* Kâr Oranı */}
-                      <td className="px-4 py-3 whitespace-nowrap text-right">
+                      <td className="px-2 py-1.5 text-right whitespace-nowrap">
                         <span className={clsx("font-medium", isProfit ? "text-green-400" : isLoss ? "text-red-400" : "text-white/70")}>
                           {formatPercentage(profitRateVal)}
                         </span>
                       </td>
 
                       {/* Kâr Marjı */}
-                      <td className="px-4 py-3 whitespace-nowrap text-right">
+                      <td className="px-2 py-1.5 text-right whitespace-nowrap">
                         <span className={clsx("font-medium", isProfit ? "text-green-400" : isLoss ? "text-red-400" : "text-white/70")}>
                           {formatPercentage(profitMarginVal)}
                         </span>

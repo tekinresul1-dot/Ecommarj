@@ -121,15 +121,35 @@ class TrendyolClaimSyncService:
                 order_number=order_number,
             ).first()
 
-        # Status
-        raw_status = claim_data.get("claimStatus") or claim_data.get("status", "Created")
+        # Status — parse from items[].claimItems[].claimItemStatus.name
+        item_statuses = set()
+        for item in claim_data.get("items", []):
+            for ci in item.get("claimItems", []):
+                s = ci.get("claimItemStatus", {}).get("name", "")
+                if s:
+                    item_statuses.add(s)
+        if "Accepted" in item_statuses:
+            raw_status = "InProgress"
+        elif "Rejected" in item_statuses or "Cancelled" in item_statuses:
+            raw_status = "Rejected"
+        else:
+            raw_status = claim_data.get("claimStatus") or claim_data.get("status", "Created")
 
         # Amount
         refund_amount = Decimal(str(claim_data.get("refundAmount", "0")))
         cargo_cost = Decimal(str(claim_data.get("cargoCost", "0")))
 
-        # Reason
+        # Reason — from first claimItem
         reason = claim_data.get("reason", "") or claim_data.get("claimReason", "")
+        if not reason:
+            for item in claim_data.get("items", []):
+                for ci in item.get("claimItems", []):
+                    r = ci.get("customerClaimItemReason", {}) or {}
+                    reason = r.get("name", "")
+                    if reason:
+                        break
+                if reason:
+                    break
 
         try:
             existing = ReturnClaim.objects.get(

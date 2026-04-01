@@ -213,6 +213,18 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "EcomMarj <info@ecommarj.co
 
 
 # ---------------------------------------------------------------------------
+# Google OAuth
+# ---------------------------------------------------------------------------
+
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+GOOGLE_OAUTH_CLIENT_IDS = [
+    client_id.strip()
+    for client_id in os.getenv("GOOGLE_OAUTH_CLIENT_IDS", GOOGLE_OAUTH_CLIENT_ID).split(",")
+    if client_id.strip()
+]
+
+
+# ---------------------------------------------------------------------------
 # Default primary key field type
 # ---------------------------------------------------------------------------
 
@@ -304,10 +316,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.trendyol_incremental_sync_all_accounts",
         "schedule": crontab(minute="*/15"),
     },
-    # Her 30 dakikada bir iade/talep senkronizasyonu
+    # Her 15 dakikada bir iade/talep senkronizasyonu
     "trendyol-claims-sync-all": {
         "task": "core.tasks.trendyol_claims_sync_all_accounts",
-        "schedule": crontab(minute="*/30"),
+        "schedule": crontab(minute="*/15"),
     },
     # Her 6 saatte bir uzlaştırma (son 1/3/7 günlük pencereleri yeniden çek)
     "trendyol-reconciliation-all": {
@@ -318,6 +330,11 @@ CELERY_BEAT_SCHEDULE = {
     "trendyol-product-sync-all": {
         "task": "core.tasks.trendyol_product_sync_all_accounts",
         "schedule": crontab(minute=0, hour=3),  # Her gece 03:00
+    },
+    # Her 6 saatte bir reklam gider senkronizasyonu
+    "trendyol-ad-expense-sync-all": {
+        "task": "core.tasks.trendyol_ad_expense_sync_all_accounts",
+        "schedule": crontab(minute=30, hour="*/6"),
     },
 }
 

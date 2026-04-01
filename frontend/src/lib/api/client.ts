@@ -3,9 +3,11 @@
 
 const getApiBase = () => {
     if (typeof window !== "undefined") {
-        return `${window.location.protocol}//${window.location.hostname}:8000/api`;
+        // Use relative /api — nginx proxies to backend, avoids hardcoded port 8000
+        return `/api`;
     }
-    return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+    // SSR: reach backend via internal Docker network
+    return process.env.NEXT_PUBLIC_API_URL || 'http://backend:8000/api';
 };
 
 const API_BASE_URL = getApiBase();

@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { formatCurrency, formatPercentage } from "@/lib/utils/format";
+import { formatCurrency } from "@/lib/utils/format";
 import apiClient from "@/lib/api/client";
-import { Filter, Calendar, RotateCcw, AlertTriangle, TrendingDown, BarChart3, RefreshCw } from "lucide-react";
+import { Filter, RotateCcw, RefreshCw } from "lucide-react";
 import clsx from "clsx";
 
 import { TableFilter, FilterState, FilterColumn, applyTableFilter } from "@/components/dashboard/TableFilter";
@@ -12,49 +12,62 @@ import { DateRange } from "react-day-picker";
 import { format, subDays } from "date-fns";
 
 interface ReturnSummary {
-  total_orders: number;
-  returned_orders: number;
-  return_rate: string;
-  total_return_cargo_loss: string;
-  total_return_revenue_loss: string;
-  return_to_sales_ratio: string;
+  total_return_count: number;
+  total_return_amount: string;
+  total_outgoing_cargo: string;
+  total_incoming_cargo: string;
+  total_cargo_loss: string;
+  total_sales: string;
+  return_loss_ratio: string;
 }
 
-interface ReturnItem {
+interface ReturnOrder {
+  order_number: string;
+  date: string;
+  status: string;
+  product_name: string;
   barcode: string;
-  title: string;
-  category: string;
-  return_count: number;
-  cargo_loss: string;
-  revenue_loss: string;
+  quantity: number;
+  sale_price: string;
+  outgoing_cargo: string;
+  incoming_cargo: string;
+  total_cargo_loss: string;
+  commission: string;
+  net_loss: string;
 }
+
+const STATUS_LABELS: Record<string, { label: string; color: string }> = {
+  Returned:    { label: "İade",    color: "text-red-400 bg-red-400/10" },
+  Cancelled:   { label: "İptal",   color: "text-orange-400 bg-orange-400/10" },
+  UnDelivered: { label: "Teslim Edilmedi", color: "text-yellow-400 bg-yellow-400/10" },
+};
 
 const FILTER_COLUMNS: FilterColumn[] = [
-  { id: "barcode", label: "Barkod", type: "text" },
-  { id: "title", label: "Ürün Adı", type: "text" },
-  { id: "category", label: "Kategori", type: "text" },
-  { id: "return_count", label: "İade Adedi", type: "number" },
-  { id: "cargo_loss", label: "Kargo Zararı (₺)", type: "number" },
-  { id: "revenue_loss", label: "Gelir Kaybı (₺)", type: "number" },
+  { id: "order_number",  label: "Sipariş No",  type: "text" },
+  { id: "product_name",  label: "Ürün Adı",    type: "text" },
+  { id: "barcode",       label: "Barkod",       type: "text" },
+  { id: "status",        label: "Durum",        type: "text" },
+  { id: "net_loss",      label: "Net Zarar (₺)", type: "number" },
 ];
 
 export default function ReturnAnalysisPage() {
   const [summary, setSummary] = useState<ReturnSummary | null>(null);
-  const [items, setItems] = useState<ReturnItem[]>([]);
+  const [orders, setOrders] = useState<ReturnOrder[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Date Range State
   const [date, setDate] = useState<DateRange | undefined>({
     from: subDays(new Date(), 30),
     to: new Date(),
   });
 
-  // Table Filtering State
   const [showFilter, setShowFilter] = useState(false);
   const [tableFilter, setTableFilter] = useState<FilterState | null>(null);
 
   useEffect(() => {
-    handleDateFilter();
+    fetchReturns(
+      date?.from ? format(date.from, "yyyy-MM-dd") : undefined,
+      date?.to   ? format(date.to,   "yyyy-MM-dd") : undefined,
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
@@ -62,33 +75,24 @@ export default function ReturnAnalysisPage() {
     setLoading(true);
     try {
       let url = "/reports/returns/";
-      if (minDate && maxDate) {
-        url += `?min_date=${minDate}&max_date=${maxDate}`;
+      if (minDate && maxDate) url += `?min_date=${minDate}&max_date=${maxDate}`;
+      const result = await apiClient.get<{ summary: ReturnSummary; orders: ReturnOrder[] }>(url);
+      if (result.ok && result.data?.summary) {
+        setSummary(result.data.summary);
+        setOrders(result.data.orders || []);
       }
-      const result = await apiClient.get<{ summary: ReturnSummary; data: ReturnItem[] }>(url);
-      if (result.ok && result.data) {
-        setSummary(result.data.summary || null);
-        setItems(result.data.data || []);
-      }
-    } catch (error) {
-      console.error("Return analysis fetch error:", error);
+    } catch (err) {
+      console.error("Return analysis fetch error:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDateFilter = () => {
-    if (date?.from && date?.to) {
-      fetchReturns(format(date.from, "yyyy-MM-dd"), format(date.to, "yyyy-MM-dd"));
-    } else {
-      fetchReturns();
-    }
-  };
-
-  const filteredItems = applyTableFilter(items, tableFilter);
+  const filteredOrders = applyTableFilter(orders, tableFilter);
 
   return (
     <div className="p-6">
+      {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6">
         <div className="flex items-center gap-3">
           <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-red-500/10 border border-red-500/20">
@@ -96,21 +100,22 @@ export default function ReturnAnalysisPage() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-white tracking-tight">İade Zarar Analizi</h1>
-            <p className="text-xs text-white/40 mt-0.5">İade edilen siparişlerin kargo ve gelir kayıpları</p>
+            <p className="text-xs text-white/40 mt-0.5">İade / iptal sipariş bazlı kargo ve net zarar analizi</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <DatePickerWithRange date={date} setDate={setDate} />
           <button
-            onClick={handleDateFilter}
+            onClick={() => fetchReturns(
+              date?.from ? format(date.from, "yyyy-MM-dd") : undefined,
+              date?.to   ? format(date.to,   "yyyy-MM-dd") : undefined,
+            )}
             className="flex items-center justify-center w-10 h-10 bg-red-600 hover:bg-red-500 text-white rounded-lg transition-colors shadow-lg shadow-red-900/20"
             title="Verileri Güncelle"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
-
-          <div className="w-px h-8 bg-white/10 mx-1 hidden sm:block"></div>
-
+          <div className="w-px h-8 bg-white/10 mx-1 hidden sm:block" />
           <button
             onClick={() => setShowFilter(!showFilter)}
             className={clsx(
@@ -121,7 +126,7 @@ export default function ReturnAnalysisPage() {
             )}
           >
             <Filter className="w-4 h-4" />
-            Tabloyu Filtrele {(tableFilter) && <span className="w-2 h-2 rounded-full bg-red-500 ml-1"></span>}
+            Tabloyu Filtrele {tableFilter && <span className="w-2 h-2 rounded-full bg-red-500 ml-1" />}
           </button>
         </div>
       </div>
@@ -136,103 +141,152 @@ export default function ReturnAnalysisPage() {
         </div>
       )}
 
-      {/* Summary Cards */}
-      {!loading && summary && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
-          <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
-            <p className="text-xs text-white/50 font-medium mb-1">Toplam Sipariş</p>
-            <p className="text-xl font-bold text-white">{summary.total_orders.toLocaleString("tr-TR")}</p>
-          </div>
-          <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
-            <div className="flex items-center gap-2 mb-1">
-              <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
-              <p className="text-xs text-white/50 font-medium">İade Sipariş Sayısı</p>
-            </div>
-            <p className="text-xl font-bold text-red-400">{summary.returned_orders.toLocaleString("tr-TR")}</p>
-          </div>
-          <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
-            <p className="text-xs text-white/50 font-medium mb-1">Toplam İade Tutarı</p>
-            <p className="text-xl font-bold text-orange-400">{formatCurrency(parseFloat(summary.total_return_revenue_loss))}</p>
-          </div>
-          <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
-            <div className="flex items-center gap-2 mb-1">
-              <TrendingDown className="w-3.5 h-3.5 text-red-400" />
-              <p className="text-xs text-white/50 font-medium">İade Kargo Zararı</p>
-            </div>
-            <p className="text-xl font-bold text-red-400">{formatCurrency(parseFloat(summary.total_return_cargo_loss))}</p>
-          </div>
-          <div className="bg-navy-900 border border-white/5 rounded-xl p-4">
-            <div className="flex items-center gap-2 mb-1">
-              <BarChart3 className="w-3.5 h-3.5 text-yellow-400" />
-              <p className="text-xs text-white/50 font-medium">İade / Satış Oranı</p>
-            </div>
-            <p className={clsx(
-              "text-xl font-bold",
-              parseFloat(summary.return_to_sales_ratio) > 15 ? "text-red-400" : parseFloat(summary.return_to_sales_ratio) > 5 ? "text-yellow-400" : "text-green-400"
-            )}>
-              {formatPercentage(parseFloat(summary.return_to_sales_ratio))}
-            </p>
-          </div>
-        </div>
-      )}
+      {/* Summary — tek satır tablo */}
+      <div className="bg-navy-900 rounded-xl border border-white/5 overflow-hidden mb-6">
+        <table className="w-full text-sm">
+          <thead className="bg-navy-800/50 border-b border-white/10 uppercase text-[10px] tracking-wider font-semibold text-white/50">
+            <tr>
+              <th className="px-4 py-3 text-center whitespace-nowrap">İade Adedi</th>
+              <th className="px-4 py-3 text-center whitespace-nowrap">İade Tutarı</th>
+              <th className="px-4 py-3 text-center whitespace-nowrap">Gidiş Kargo</th>
+              <th className="px-4 py-3 text-center whitespace-nowrap">Geliş Kargo</th>
+              <th className="px-4 py-3 text-center whitespace-nowrap">Toplam Kargo Zararı</th>
+              <th className="px-4 py-3 text-center whitespace-nowrap">Toplam Satış</th>
+              <th className="px-4 py-3 text-center whitespace-nowrap">Zarar / Satış %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={7} className="px-4 py-6 text-center text-white/40 text-sm">
+                  <div className="flex justify-center items-center gap-2">
+                    <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+                    Yükleniyor...
+                  </div>
+                </td>
+              </tr>
+            ) : summary ? (
+              <tr className="text-center">
+                <td className="px-4 py-4 font-bold text-white text-lg">{summary.total_return_count}</td>
+                <td className="px-4 py-4 font-bold text-orange-400">{formatCurrency(parseFloat(summary.total_return_amount))}</td>
+                <td className="px-4 py-4 font-semibold text-red-400">{formatCurrency(parseFloat(summary.total_outgoing_cargo))}</td>
+                <td className="px-4 py-4 font-semibold text-red-400">{formatCurrency(parseFloat(summary.total_incoming_cargo))}</td>
+                <td className="px-4 py-4 font-bold text-red-500">{formatCurrency(parseFloat(summary.total_cargo_loss))}</td>
+                <td className="px-4 py-4 font-semibold text-green-400">{formatCurrency(parseFloat(summary.total_sales))}</td>
+                <td className={clsx(
+                  "px-4 py-4 font-bold text-lg",
+                  parseFloat(summary.return_loss_ratio) > 10 ? "text-red-400" :
+                  parseFloat(summary.return_loss_ratio) > 5 ? "text-yellow-400" : "text-green-400"
+                )}>
+                  %{summary.return_loss_ratio}
+                </td>
+              </tr>
+            ) : (
+              <tr>
+                <td colSpan={7} className="px-4 py-6 text-center text-white/40 text-sm">Veri bulunamadı</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
 
+      {/* Orders Table */}
       <div className="bg-navy-900 rounded-xl border border-white/5 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm text-white/80">
-            <thead className="bg-navy-800/50 text-white border-b border-light-navy uppercase text-[10px] tracking-wider font-semibold">
+          <table className="w-full table-fixed text-[13px] text-left text-white/80">
+            <colgroup>
+              <col style={{ width: "130px" }} />
+              <col style={{ width: "110px" }} />
+              <col style={{ width: "90px" }} />
+              <col />
+              <col style={{ width: "120px" }} />
+              <col style={{ width: "60px" }} />
+              <col style={{ width: "100px" }} />
+              <col style={{ width: "90px" }} />
+              <col style={{ width: "90px" }} />
+              <col style={{ width: "100px" }} />
+              <col style={{ width: "80px" }} />
+              <col style={{ width: "100px" }} />
+            </colgroup>
+            <thead className="bg-navy-800/50 text-white border-b border-white/10 uppercase text-[10px] tracking-wider font-semibold">
               <tr>
-                <th className="px-4 py-4 whitespace-nowrap">Barkod</th>
-                <th className="px-4 py-4 whitespace-nowrap">Ürün Adı</th>
-                <th className="px-4 py-4 whitespace-nowrap">Kategori</th>
-                <th className="px-4 py-4 whitespace-nowrap text-right">İade Adedi</th>
-                <th className="px-4 py-4 whitespace-nowrap text-right">Kargo Zararı (₺)</th>
-                <th className="px-4 py-4 whitespace-nowrap text-right">Gelir Kaybı (₺)</th>
+                <th className="px-2 py-2 whitespace-nowrap">Sipariş No</th>
+                <th className="px-2 py-2 whitespace-nowrap">Tarih</th>
+                <th className="px-2 py-2 whitespace-nowrap">Durum</th>
+                <th className="px-2 py-2 whitespace-nowrap">Ürün Adı</th>
+                <th className="px-2 py-2 whitespace-nowrap">Barkod</th>
+                <th className="px-2 py-2 whitespace-nowrap text-right">Adet</th>
+                <th className="px-2 py-2 whitespace-nowrap text-right">Satış Fiyatı</th>
+                <th className="px-2 py-2 whitespace-nowrap text-right">Gidiş Kargo</th>
+                <th className="px-2 py-2 whitespace-nowrap text-right">Geliş Kargo</th>
+                <th className="px-2 py-2 whitespace-nowrap text-right">Toplam Kargo</th>
+                <th className="px-2 py-2 whitespace-nowrap text-right">Komisyon</th>
+                <th className="px-2 py-2 whitespace-nowrap text-right">Net Zarar</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-white/50">
+                  <td colSpan={12} className="px-6 py-8 text-center text-white/50">
                     <div className="flex justify-center items-center gap-3">
-                      <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                      <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                       İade verileri yükleniyor...
                     </div>
                   </td>
                 </tr>
-              ) : filteredItems.length === 0 ? (
+              ) : filteredOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-white/50">
-                    Kayıt bulunamadı.
+                  <td colSpan={12} className="px-6 py-8 text-center text-white/50">
+                    Seçilen tarih aralığında iade kaydı bulunamadı.
                   </td>
                 </tr>
               ) : (
-                filteredItems.map((item) => {
-                  const cargoLoss = parseFloat(item.cargo_loss);
-                  const revenueLoss = parseFloat(item.revenue_loss);
+                filteredOrders.map((order, idx) => {
+                  const statusInfo = STATUS_LABELS[order.status] || { label: order.status, color: "text-white/60 bg-white/10" };
+                  const netLoss = parseFloat(order.net_loss);
 
                   return (
-                    <tr key={item.barcode} className="hover:bg-white/5 transition-colors group">
-                      <td className="px-4 py-3 whitespace-nowrap font-medium text-white/90">
-                        {item.barcode}
+                    <tr
+                      key={`${order.order_number}-${idx}`}
+                      className="hover:bg-white/5 transition-colors"
+                    >
+                      <td className="px-2 py-1.5 whitespace-nowrap font-mono text-[12px] text-white/70">
+                        {order.order_number || "-"}
                       </td>
-                      <td className="px-4 py-3 min-w-[200px] max-w-[300px] truncate" title={item.title}>
-                        {item.title}
+                      <td className="px-2 py-1.5 whitespace-nowrap text-[12px] text-white/60">
+                        {order.date}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-white/70">
-                        {item.category || "-"}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-right font-bold text-red-400">
-                        {item.return_count}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-right">
-                        <span className={clsx("font-medium", cargoLoss > 0 ? "text-red-400" : "text-white/60")}>
-                          {cargoLoss > 0 ? `-${formatCurrency(cargoLoss)}` : "₺0,00"}
+                      <td className="px-2 py-1.5 whitespace-nowrap">
+                        <span className={clsx("px-2 py-0.5 rounded text-[11px] font-medium", statusInfo.color)}>
+                          {statusInfo.label}
                         </span>
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-right">
-                        <span className={clsx("font-medium", revenueLoss > 0 ? "text-orange-400" : "text-white/60")}>
-                          {revenueLoss > 0 ? formatCurrency(revenueLoss) : "₺0,00"}
-                        </span>
+                      <td className="px-2 py-1.5 truncate max-w-0" title={order.product_name}>
+                        <span className="text-white/90">{order.product_name || "-"}</span>
+                      </td>
+                      <td className="px-2 py-1.5 whitespace-nowrap text-[12px] text-white/60">
+                        {order.barcode || "-"}
+                      </td>
+                      <td className="px-2 py-1.5 whitespace-nowrap text-right text-white/80">
+                        {order.quantity}
+                      </td>
+                      <td className="px-2 py-1.5 whitespace-nowrap text-right text-white/80">
+                        {formatCurrency(parseFloat(order.sale_price))}
+                      </td>
+                      <td className="px-2 py-1.5 whitespace-nowrap text-right text-white/60">
+                        {parseFloat(order.outgoing_cargo) > 0 ? `-${formatCurrency(parseFloat(order.outgoing_cargo))}` : "₺0,00"}
+                      </td>
+                      <td className="px-2 py-1.5 whitespace-nowrap text-right text-white/60">
+                        {parseFloat(order.incoming_cargo) > 0 ? `-${formatCurrency(parseFloat(order.incoming_cargo))}` : "₺0,00"}
+                      </td>
+                      <td className="px-2 py-1.5 whitespace-nowrap text-right text-red-400 font-medium">
+                        {parseFloat(order.total_cargo_loss) > 0 ? `-${formatCurrency(parseFloat(order.total_cargo_loss))}` : "₺0,00"}
+                      </td>
+                      <td className="px-2 py-1.5 whitespace-nowrap text-right text-white/50">
+                        ₺0,00
+                      </td>
+                      <td className={clsx("px-2 py-1.5 whitespace-nowrap text-right font-bold", netLoss > 0 ? "text-red-400" : "text-white/50")}>
+                        {netLoss > 0 ? `-${formatCurrency(netLoss)}` : "₺0,00"}
                       </td>
                     </tr>
                   );
@@ -241,6 +295,12 @@ export default function ReturnAnalysisPage() {
             </tbody>
           </table>
         </div>
+
+        {!loading && filteredOrders.length > 0 && (
+          <div className="px-4 py-2 border-t border-white/5 text-[12px] text-white/40">
+            {filteredOrders.length} sipariş gösteriliyor
+          </div>
+        )}
       </div>
     </div>
   );

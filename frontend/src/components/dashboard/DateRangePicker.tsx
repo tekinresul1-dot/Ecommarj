@@ -1,19 +1,15 @@
 "use client"
 
 import * as React from "react"
-import { addDays, format, subDays, startOfMonth, startOfToday, endOfMonth, endOfToday, subMonths } from "date-fns"
+import { format, subDays, startOfMonth, startOfToday, endOfMonth, endOfToday, subMonths } from "date-fns"
 import { tr } from "date-fns/locale"
-import { Calendar as CalendarIcon, ChevronLeft, ChevronRight } from "lucide-react"
+import { Calendar as CalendarIcon } from "lucide-react"
 import { DateRange } from "react-day-picker"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Calendar } from "@/components/ui/calendar"
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from "@/components/ui/popover"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 
 interface DatePickerWithRangeProps extends React.HTMLAttributes<HTMLDivElement> {
     date: DateRange | undefined;
@@ -21,41 +17,86 @@ interface DatePickerWithRangeProps extends React.HTMLAttributes<HTMLDivElement> 
 }
 
 const PRESETS = [
-    { label: "Bugün", getValue: () => ({ from: startOfToday(), to: endOfToday() }) },
-    { label: "Dün", getValue: () => ({ from: subDays(startOfToday(), 1), to: subDays(endOfToday(), 1) }) },
+    { label: "Bugün",     getValue: () => ({ from: startOfToday(), to: endOfToday() }) },
+    { label: "Dün",       getValue: () => ({ from: subDays(startOfToday(), 1), to: subDays(startOfToday(), 1) }) },
     { label: "Son 7 Gün", getValue: () => ({ from: subDays(startOfToday(), 7), to: endOfToday() }) },
-    { label: "Son 30 Gün", getValue: () => ({ from: subDays(startOfToday(), 30), to: endOfToday() }) },
-    { label: "Bu Ay", getValue: () => ({ from: startOfMonth(startOfToday()), to: endOfMonth(startOfToday()) }) },
-    {
-        label: "Geçen Ay", getValue: () => {
-            const startOfLastMonth = startOfMonth(subMonths(startOfToday(), 1));
-            const endOfLastMonth = endOfMonth(subMonths(startOfToday(), 1));
-            return { from: startOfLastMonth, to: endOfLastMonth };
-        }
-    },
+    { label: "Son 30 Gün",getValue: () => ({ from: subDays(startOfToday(), 30), to: endOfToday() }) },
+    { label: "Bu Ay",     getValue: () => ({ from: startOfMonth(startOfToday()), to: endOfMonth(startOfToday()) }) },
+    { label: "Geçen Ay",  getValue: () => {
+        const s = startOfMonth(subMonths(startOfToday(), 1));
+        const e = endOfMonth(subMonths(startOfToday(), 1));
+        return { from: s, to: e };
+    }},
 ];
 
-export function DatePickerWithRange({
-    className,
-    date,
-    setDate,
-}: DatePickerWithRangeProps) {
-    const [isOpen, setIsOpen] = React.useState(false);
-    const [tempDate, setTempDate] = React.useState<DateRange | undefined>(date);
+export function DatePickerWithRange({ className, date, setDate }: DatePickerWithRangeProps) {
+    const [isOpen, setIsOpen]           = React.useState(false);
+    // 'from' = waiting for 1st click, 'to' = waiting for 2nd click
+    const [phase, setPhase]             = React.useState<'from' | 'to'>('from');
+    const [tempFrom, setTempFrom]       = React.useState<Date | undefined>(date?.from);
+    const [tempTo, setTempTo]           = React.useState<Date | undefined>(date?.to);
     const [activePreset, setActivePreset] = React.useState<string | null>(null);
 
-    // When popover opens, sync temp date with actual date
+    // Sync when popover opens; always reset to 'from' phase
     React.useEffect(() => {
         if (isOpen) {
-            setTempDate(date);
+            setTempFrom(date?.from);
+            setTempTo(date?.to);
             setActivePreset(null);
+            setPhase('from');
         }
-    }, [isOpen, date]);
+    }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const handleApply = () => {
-        setDate(tempDate);
+    // Preset: apply immediately, close popover — no "Uygula" needed
+    const handlePreset = (preset: typeof PRESETS[0]) => {
+        const value = preset.getValue();
+        setDate(value);
+        setActivePreset(preset.label);
         setIsOpen(false);
     };
+
+    // Two-click range selection — fully controlled, react-day-picker won't interfere
+    const handleDayClick = (day: Date | undefined) => {
+        if (!day) return;
+        setActivePreset(null);
+
+        if (phase === 'from') {
+            // 1st click → set start, wait for end
+            setTempFrom(day);
+            setTempTo(undefined);
+            setPhase('to');
+        } else {
+            // 2nd click → complete range
+            if (!tempFrom) {
+                setTempFrom(day);
+                return;
+            }
+            if (day >= tempFrom) {
+                setTempTo(day);
+            } else {
+                // Clicked before start → swap
+                setTempTo(tempFrom);
+                setTempFrom(day);
+            }
+            // Stay in 'to' — range complete, await Uygula
+        }
+    };
+
+    const handleApply = () => {
+        if (tempFrom && tempTo) {
+            setDate({ from: tempFrom, to: tempTo });
+        }
+        setIsOpen(false);
+    };
+
+    // Modifiers passed to Calendar so range_start/middle/end styling works
+    const rangeModifiers = React.useMemo(() => ({
+        range_start:  tempFrom ? [tempFrom] : [],
+        range_end:    tempTo   ? [tempTo]   : [],
+        range_middle: tempFrom && tempTo
+            ? { after: tempFrom, before: tempTo }
+            : [],
+    }), [tempFrom, tempTo]);
 
     return (
         <div className={cn("grid gap-2", className)}>
@@ -69,12 +110,12 @@ export function DatePickerWithRange({
                             !date && "text-white/50"
                         )}
                     >
-                        <CalendarIcon className="mr-2 h-4 w-4 text-blue-400 group-hover:text-blue-300" />
+                        <CalendarIcon className="mr-2 h-4 w-4 text-blue-400" />
                         {date?.from ? (
                             date.to ? (
                                 <>
-                                    {format(date.from, "dd MMM yyyy", { locale: tr })} -{" "}
-                                    {format(date.to, "dd MMM yyyy", { locale: tr })}
+                                    {format(date.from, "dd MMM yyyy", { locale: tr })} –{" "}
+                                    {format(date.to,   "dd MMM yyyy", { locale: tr })}
                                 </>
                             ) : (
                                 format(date.from, "dd MMM yyyy", { locale: tr })
@@ -84,73 +125,86 @@ export function DatePickerWithRange({
                         )}
                     </Button>
                 </PopoverTrigger>
+
                 <PopoverContent
                     className="w-auto p-0 bg-navy-950 border-white/10 text-white shadow-2xl rounded-xl overflow-hidden animate-in zoom-in-95 duration-200"
                     align="end"
                 >
                     <div className="flex flex-col sm:flex-row">
-                        {/* Presets Sidebar */}
-                        <div className="flex sm:flex-col p-3 border-b sm:border-b-0 sm:border-r border-white/10 bg-black/20 min-w-[140px] overflow-x-auto sm:overflow-x-visible gap-1.5 align-top">
-                            <div className="text-[11px] font-semibold text-white/40 uppercase tracking-widest mb-2 px-2 hidden sm:block">Hızlı Seçim</div>
-                            {PRESETS.map((preset) => {
-                                const isActive = activePreset === preset.label;
-                                return (
-                                    <button
-                                        key={preset.label}
-                                        onClick={() => {
-                                            setTempDate(preset.getValue());
-                                            setActivePreset(preset.label);
-                                        }}
-                                        className={cn(
-                                            "px-3 py-2 text-[13px] text-left rounded-lg transition-all duration-200 whitespace-nowrap sm:whitespace-normal font-medium",
-                                            isActive
-                                                ? "bg-blue-600/20 text-blue-400 ring-1 ring-blue-500/30"
-                                                : "text-white/70 hover:bg-white/10 hover:text-white"
-                                        )}
-                                    >
-                                        {preset.label}
-                                    </button>
-                                );
-                            })}
+
+                        {/* ── Presets (direkt uygular) ── */}
+                        <div className="flex sm:flex-col p-3 border-b sm:border-b-0 sm:border-r border-white/10 bg-black/20 min-w-[140px] gap-1.5 overflow-x-auto sm:overflow-visible">
+                            <div className="text-[11px] font-semibold text-white/40 uppercase tracking-widest mb-2 px-2 hidden sm:block">
+                                Hızlı Seçim
+                            </div>
+                            {PRESETS.map((preset) => (
+                                <button
+                                    key={preset.label}
+                                    onClick={() => handlePreset(preset)}
+                                    className={cn(
+                                        "px-3 py-2 text-[13px] text-left rounded-lg transition-all font-medium whitespace-nowrap sm:whitespace-normal",
+                                        activePreset === preset.label
+                                            ? "bg-blue-600/20 text-blue-400 ring-1 ring-blue-500/30"
+                                            : "text-white/70 hover:bg-white/10 hover:text-white"
+                                    )}
+                                >
+                                    {preset.label}
+                                </button>
+                            ))}
                         </div>
 
-                        {/* Calendar View */}
+                        {/* ── Calendar (mode="single" + custom range modifiers) ── */}
                         <div className="p-4 bg-navy-950">
                             <Calendar
                                 initialFocus
-                                mode="range"
-                                defaultMonth={tempDate?.from}
-                                selected={tempDate}
-                                onSelect={(range) => {
-                                    setTempDate(range);
-                                    setActivePreset(null);
-                                }}
+                                mode="single"
+                                selected={undefined}
+                                onSelect={handleDayClick}
+                                defaultMonth={tempFrom}
+                                modifiers={rangeModifiers}
                                 numberOfMonths={2}
                                 locale={tr}
                                 className="bg-transparent text-white"
                             />
 
-                            <div className="flex items-center justify-between pt-4 border-t border-white/10 mt-4">
-                                <div className="text-[13px] text-white/50 font-medium bg-black/20 px-3 py-1.5 rounded-md border border-white/5">
-                                    {tempDate?.from ? (
-                                        tempDate.to ? (
+                            {/* ── Footer ── */}
+                            <div className="flex items-center justify-between pt-4 border-t border-white/10 mt-4 gap-3">
+                                {/* Selected range display */}
+                                <div className="text-[13px] font-medium bg-black/20 px-3 py-1.5 rounded-md border border-white/5 min-w-[210px]">
+                                    {tempFrom ? (
+                                        tempTo ? (
                                             <>
-                                                <span className="text-white/80">{format(tempDate.from, "dd MMM yyyy", { locale: tr })}</span>
+                                                <span className="text-white/80">{format(tempFrom, "dd MMM yyyy", { locale: tr })}</span>
                                                 <span className="mx-2 text-white/30">→</span>
-                                                <span className="text-white/80">{format(tempDate.to, "dd MMM yyyy", { locale: tr })}</span>
+                                                <span className="text-white/80">{format(tempTo, "dd MMM yyyy", { locale: tr })}</span>
                                             </>
                                         ) : (
-                                            <span className="text-white/80">{format(tempDate.from, "dd MMM yyyy", { locale: tr })}</span>
+                                            <>
+                                                <span className="text-white/80">{format(tempFrom, "dd MMM yyyy", { locale: tr })}</span>
+                                                <span className="mx-2 text-blue-400/70 animate-pulse">→ bitiş seçin</span>
+                                            </>
                                         )
                                     ) : (
-                                        "Lütfen bir tarih seçin"
+                                        <span className="text-white/40">Başlangıç tarihi seçin</span>
                                     )}
                                 </div>
-                                <div className="flex justify-end gap-2">
-                                    <Button size="sm" variant="ghost" className="text-[13px] text-white/70 hover:text-white hover:bg-white/10 h-8 px-4 rounded-md" onClick={() => setIsOpen(false)}>
+
+                                {/* Actions */}
+                                <div className="flex gap-2">
+                                    <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        className="text-[13px] text-white/70 hover:text-white hover:bg-white/10 h-8 px-4 rounded-md"
+                                        onClick={() => setIsOpen(false)}
+                                    >
                                         İptal
                                     </Button>
-                                    <Button size="sm" className="h-8 px-5 text-[13px] font-medium bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20 border-0 rounded-md transition-all" onClick={handleApply}>
+                                    <Button
+                                        size="sm"
+                                        disabled={!tempFrom || !tempTo}
+                                        className="h-8 px-5 text-[13px] font-medium bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white border-0 rounded-md transition-all"
+                                        onClick={handleApply}
+                                    >
                                         Uygula
                                     </Button>
                                 </div>
@@ -160,5 +214,5 @@ export function DatePickerWithRange({
                 </PopoverContent>
             </Popover>
         </div>
-    )
+    );
 }

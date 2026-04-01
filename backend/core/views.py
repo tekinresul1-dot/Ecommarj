@@ -5,6 +5,7 @@ from django.utils import timezone
 from django.db import models as django_models
 from decimal import Decimal
 
+from django.db.models import Prefetch
 from core.models import (
     Organization, MarketplaceAccount, Product, ProductVariant,
     Order, OrderItem, FinancialTransactionType
@@ -21,19 +22,18 @@ MONTHS_TR = {
 def format_date_tr(dt):
     if not dt:
         return ""
-    from django.utils import timezone
     from datetime import datetime
-    if isinstance(dt, datetime) and timezone.is_aware(dt):
-        dt = timezone.localtime(dt)
+    # Trendyol timestamps are stored as Istanbul local time (no conversion needed)
+    if hasattr(dt, 'replace'):
+        dt = dt.replace(tzinfo=None)
     return f"{dt.day:02d} {MONTHS_TR[dt.month]} {dt.year} - {dt.strftime('%H:%M') if isinstance(dt, datetime) else '00:00'}"
 
 def format_date_short_tr(dt):
     if not dt:
         return ""
-    from django.utils import timezone
-    from datetime import datetime
-    if isinstance(dt, datetime) and timezone.is_aware(dt):
-        dt = timezone.localtime(dt)
+    from datetime import datetime, date
+    if isinstance(dt, datetime):
+        dt = dt.replace(tzinfo=None)
     return f"{dt.day:02d} {MONTHS_TR[dt.month]}"
     
 class TriggerSyncView(APIView):
@@ -1114,116 +1114,149 @@ class CategoryAnalysisView(APIView):
 class ReturnAnalysisView(APIView):
     """
     GET /api/reports/returns/
-    İade/iptal sipariş analizi döndürür. min_date/max_date filtreleri destekler.
+    Sipariş bazlı iade/iptal analizi. Kargo zararı ve net zarar.
     """
     permission_classes = [IsAuthenticated]
 
+    # Kargo firması adını CarrierFlatRate'e eşler
+    _flat_rate_cache: dict = {}
+
+    def _get_cargo_flat_rate(self, cargo_provider_name: str) -> "Decimal":
+        from decimal import Decimal
+        from core.models import CarrierFlatRate
+        DEFAULT = Decimal("135.32")
+        if not cargo_provider_name:
+            return DEFAULT
+        key = cargo_provider_name.lower()
+        if key in self._flat_rate_cache:
+            return self._flat_rate_cache[key]
+        for carrier in CarrierFlatRate.objects.all():
+            if carrier.carrier_name.lower() in key:
+                self._flat_rate_cache[key] = carrier.rate_kdv_dahil
+                return carrier.rate_kdv_dahil
+        self._flat_rate_cache[key] = DEFAULT
+        return DEFAULT
+
     def get(self, request):
         try:
-            profile = request.user.profile
-            org = profile.organization
-        except Exception as e:
-            return Response({"error": f"Organizasyon bulunamadı: {str(e)}"}, status=400)
+            org = request.user.profile.organization
+        except Exception:
+            return Response({"error": "Organizasyon bulunamadı"}, status=400)
 
-        from core.models import OrderItem, Order
-        from core.services.profit_calculator import ProfitCalculator
-        from decimal import Decimal
-        from datetime import datetime, time
+        import zoneinfo
+        from datetime import datetime as dt_cls, time as dt_time, timedelta
+        from decimal import Decimal, ROUND_HALF_UP
 
-        all_orders = Order.objects.filter(marketplace_account__organization=org)
-        
-        # Tarih filtresi
+        tz = zoneinfo.ZoneInfo("Europe/Istanbul")
+        Q2 = Decimal("0.01")
+        RETURN_STATUSES = ["Returned", "Cancelled", "UnDelivered"]
+        self._flat_rate_cache = {}
+
+        # ── Tarih aralığı ──────────────────────────────────────────────
         min_date_str = request.query_params.get("min_date")
         max_date_str = request.query_params.get("max_date")
         if min_date_str and max_date_str:
             try:
-                min_date = timezone.make_aware(datetime.strptime(min_date_str, "%Y-%m-%d"))
-                max_date = timezone.make_aware(datetime.combine(datetime.strptime(max_date_str, "%Y-%m-%d"), time.max))
-                all_orders = all_orders.filter(order_date__gte=min_date, order_date__lte=max_date)
+                min_date = dt_cls.strptime(min_date_str, "%Y-%m-%d").replace(tzinfo=tz)
+                max_date = dt_cls.combine(
+                    dt_cls.strptime(max_date_str, "%Y-%m-%d").date(), dt_time.max
+                ).replace(tzinfo=tz)
             except ValueError:
-                pass
-        
-        returned_orders = all_orders.filter(status__in=["Returned", "Cancelled"])
+                min_date = timezone.now() - timedelta(days=30)
+                max_date = timezone.now()
+        else:
+            min_date = timezone.now() - timedelta(days=30)
+            max_date = timezone.now()
 
-        total_order_count = all_orders.count()
-        returned_order_count = returned_orders.count()
+        all_qs = Order.objects.filter(
+            organization=org,
+            order_date__gte=min_date,
+            order_date__lte=max_date,
+        )
 
-        return_rate = Decimal("0.00")
-        if total_order_count > 0:
-            return_rate = round(Decimal(returned_order_count) / Decimal(total_order_count) * Decimal("100"), 2)
+        returned_qs = all_qs.filter(
+            status__in=RETURN_STATUSES
+        ).prefetch_related(
+            Prefetch('items', queryset=OrderItem.objects.select_related('product_variant__product')),
+        ).order_by('-order_date')
 
-        # Toplam satış tutarını hesapla (tüm siparişlerden)
-        all_items = OrderItem.objects.filter(order__in=all_orders)
-        total_sales_amount = sum(item.sale_price_gross for item in all_items)
+        # ── Toplam satış (iade olmayan siparişler) ─────────────────────
+        from django.db.models import Sum as DjSum
+        total_sales = OrderItem.objects.filter(
+            order__in=all_qs.exclude(status__in=RETURN_STATUSES)
+        ).aggregate(s=DjSum('sale_price_gross'))['s'] or Decimal("0")
 
-        items = OrderItem.objects.filter(
-            order__in=returned_orders,
-            product_variant__isnull=False
-        ).select_related('product_variant', 'product_variant__product', 'order').prefetch_related('transactions')
+        # ── Sipariş bazlı hesaplama ────────────────────────────────────
+        sum_return_amount  = Decimal("0")
+        sum_return_qty     = 0
+        sum_outgoing_cargo = Decimal("0")
+        sum_incoming_cargo = Decimal("0")
+        order_rows = []
 
-        product_return_map = {}
-        total_return_cargo_loss = Decimal("0.00")
-        total_return_revenue_loss = Decimal("0.00")
-
-        for item in items:
-            variant = item.product_variant
-            if not variant or not variant.product:
+        for order in returned_qs:
+            items = list(order.items.all())
+            if not items:
                 continue
 
-            barcode = variant.barcode or ""
-            if not barcode:
-                continue
+            order_sale_price = Decimal("0")
+            order_qty        = 0
+            display_name     = ""
+            display_barcode  = ""
 
-            profit_info = ProfitCalculator.calculate_for_order_item(item)
-            bd = profit_info.get("breakdown", {})
-            shipping_cost = bd.get("SHIPPING_FEE", Decimal("0.00"))
+            for item in items:
+                order_sale_price += item.sale_price_gross
+                order_qty        += item.quantity
+                if not display_name and item.product_variant and item.product_variant.product:
+                    display_name    = item.product_variant.product.title
+                    display_barcode = item.product_variant.barcode or ""
 
-            total_return_cargo_loss += shipping_cost
-            total_return_revenue_loss += profit_info["gross_revenue"]
+            # Kargo maliyeti: CarrierFlatRate üzerinden cargo_provider_name ile eşleştirilir
+            outgoing_cargo = self._get_cargo_flat_rate(order.cargo_provider_name)
+            incoming_cargo = outgoing_cargo  # geliş kargo = gidiş kargo (Trendyol iadeleri)
+            total_cargo_loss = (outgoing_cargo + incoming_cargo).quantize(Q2, ROUND_HALF_UP)
+            net_loss = total_cargo_loss
 
-            if barcode not in product_return_map:
-                product_return_map[barcode] = {
-                    "barcode": barcode,
-                    "title": variant.product.title,
-                    "category": variant.product.category_name or "",
-                    "return_count": 0,
-                    "cargo_loss": Decimal("0.00"),
-                    "revenue_loss": Decimal("0.00"),
-                }
+            sum_return_amount  += order_sale_price
+            sum_return_qty     += order_qty
+            sum_outgoing_cargo += outgoing_cargo
+            sum_incoming_cargo += incoming_cargo
 
-            product_return_map[barcode]["return_count"] += item.quantity
-            product_return_map[barcode]["cargo_loss"] += shipping_cost
-            product_return_map[barcode]["revenue_loss"] += profit_info["gross_revenue"]
+            order_date_str = order.order_date.astimezone(tz).strftime("%d.%m.%Y %H:%M")
 
-        product_returns = []
-        for stats in product_return_map.values():
-            product_returns.append({
-                "barcode": stats["barcode"],
-                "title": stats["title"],
-                "category": stats["category"],
-                "return_count": stats["return_count"],
-                "cargo_loss": str(stats["cargo_loss"]),
-                "revenue_loss": str(stats["revenue_loss"]),
+            order_rows.append({
+                "order_number":     order.order_number or order.marketplace_order_id or "",
+                "date":             order_date_str,
+                "status":           order.status,
+                "product_name":     display_name,
+                "barcode":          display_barcode,
+                "quantity":         order_qty,
+                "sale_price":       str(order_sale_price.quantize(Q2, ROUND_HALF_UP)),
+                "outgoing_cargo":   str(outgoing_cargo.quantize(Q2, ROUND_HALF_UP)),
+                "incoming_cargo":   str(incoming_cargo.quantize(Q2, ROUND_HALF_UP)),
+                "total_cargo_loss": str(total_cargo_loss),
+                "commission":       "0.00",
+                "net_loss":         str(net_loss),
             })
 
-        product_returns.sort(key=lambda x: int(x["return_count"]), reverse=True)
-        
-        # İade/Satış oranı
-        return_to_sales_ratio = Decimal("0.00")
-        if total_sales_amount > Decimal("0.00"):
-            return_to_sales_ratio = round(total_return_revenue_loss / total_sales_amount * Decimal("100"), 2)
+        # ── Özet ──────────────────────────────────────────────────────
+        total_cargo_loss_sum = (sum_outgoing_cargo + sum_incoming_cargo).quantize(Q2, ROUND_HALF_UP)
+
+        loss_ratio = Decimal("0")
+        if total_sales > Decimal("0"):
+            loss_ratio = (total_cargo_loss_sum / total_sales * Decimal("100")).quantize(Q2, ROUND_HALF_UP)
 
         return Response({
             "data": {
                 "summary": {
-                    "total_orders": total_order_count,
-                    "returned_orders": returned_order_count,
-                    "return_rate": str(return_rate),
-                    "total_return_cargo_loss": str(total_return_cargo_loss),
-                    "total_return_revenue_loss": str(total_return_revenue_loss),
-                    "return_to_sales_ratio": str(return_to_sales_ratio),
+                    "total_return_count":   sum_return_qty,
+                    "total_return_amount":  str(sum_return_amount.quantize(Q2, ROUND_HALF_UP)),
+                    "total_outgoing_cargo": str(sum_outgoing_cargo.quantize(Q2, ROUND_HALF_UP)),
+                    "total_incoming_cargo": str(sum_incoming_cargo.quantize(Q2, ROUND_HALF_UP)),
+                    "total_cargo_loss":     str(total_cargo_loss_sum),
+                    "total_sales":          str(total_sales.quantize(Q2, ROUND_HALF_UP)),
+                    "return_loss_ratio":    str(loss_ratio),
                 },
-                "data": product_returns,
+                "orders": order_rows,
             }
         })
 
@@ -1242,66 +1275,113 @@ class AdsAnalysisView(APIView):
         except Exception as e:
             return Response({"error": f"Organizasyon bulunamadı: {str(e)}"}, status=400)
 
-        from core.models import OrderItem, Order, FinancialTransaction
+        from core.models import OrderItem, Order, AdExpense
         from core.services.profit_calculator import ProfitCalculator
         from decimal import Decimal
-        from datetime import datetime, time
+        from datetime import datetime, time, date as date_cls
 
-        # Tarih filtresi
+        Q2 = Decimal("0.01")
+        ROUND_HALF_UP = __import__("decimal").ROUND_HALF_UP
+
+        # ── Tarih filtresi ─────────────────────────────────────────────
         min_date_str = request.query_params.get("min_date")
         max_date_str = request.query_params.get("max_date")
-        
-        orders = Order.objects.filter(marketplace_account__organization=org)
-        ads_txns = FinancialTransaction.objects.filter(
-            organization=org,
-            transaction_type=FinancialTransactionType.ADS_COST.value,
-        )
-        
+
+        orders = Order.objects.filter(organization=org)
+        ad_qs  = AdExpense.objects.filter(organization=org)
+
         if min_date_str and max_date_str:
             try:
-                min_date = timezone.make_aware(datetime.strptime(min_date_str, "%Y-%m-%d"))
-                max_date = timezone.make_aware(datetime.combine(datetime.strptime(max_date_str, "%Y-%m-%d"), time.max))
-                orders = orders.filter(order_date__gte=min_date, order_date__lte=max_date)
-                ads_txns = ads_txns.filter(occurred_at__gte=min_date, occurred_at__lte=max_date)
+                min_dt = timezone.make_aware(datetime.strptime(min_date_str, "%Y-%m-%d"))
+                max_dt = timezone.make_aware(datetime.combine(datetime.strptime(max_date_str, "%Y-%m-%d"), time.max))
+                min_d  = datetime.strptime(min_date_str, "%Y-%m-%d").date()
+                max_d  = datetime.strptime(max_date_str, "%Y-%m-%d").date()
+                orders = orders.filter(order_date__gte=min_dt, order_date__lte=max_dt)
+                ad_qs  = ad_qs.filter(transaction_date__gte=min_d, transaction_date__lte=max_d)
             except ValueError:
                 pass
 
-        # Reklam harcaması toplamı
-        total_ads_cost = sum(abs(txn.amount) for txn in ads_txns)
-        
-        # Influencer kesintisi (şimdilik "OTHER" type ile tutulabilir, ya da 0)
-        influencer_cost = Decimal("0.00")
+        # ── Reklam & influencer giderleri ──────────────────────────────
+        total_advertising = Decimal("0")
+        total_influencer  = Decimal("0")
+        transactions_list = []
 
-        # Siparişlerden toplam satış ve kâr
+        for exp in ad_qs.order_by("-transaction_date"):
+            if exp.expense_type == AdExpense.ExpenseType.INFLUENCER:
+                total_influencer += exp.amount
+            else:
+                total_advertising += exp.amount
+            transactions_list.append({
+                "date":             str(exp.transaction_date),
+                "type":             exp.get_expense_type_display(),
+                "transaction_type": exp.transaction_type,
+                "amount":           str(exp.amount.quantize(Q2, ROUND_HALF_UP)),
+                "description":      exp.description,
+            })
+
+        # Fallback: FinancialTransaction ADS_COST
+        if not transactions_list:
+            from core.models import FinancialTransaction
+            ads_txns = FinancialTransaction.objects.filter(
+                organization=org,
+                transaction_type=FinancialTransactionType.ADS_COST.value,
+            )
+            if min_date_str and max_date_str:
+                try:
+                    min_dt = timezone.make_aware(datetime.strptime(min_date_str, "%Y-%m-%d"))
+                    max_dt = timezone.make_aware(datetime.combine(datetime.strptime(max_date_str, "%Y-%m-%d"), time.max))
+                    ads_txns = ads_txns.filter(occurred_at__gte=min_dt, occurred_at__lte=max_dt)
+                except ValueError:
+                    pass
+            for txn in ads_txns:
+                total_advertising += abs(txn.amount)
+                transactions_list.append({
+                    "date":             txn.occurred_at.strftime("%Y-%m-%d"),
+                    "type":             "Trendyol Reklam",
+                    "transaction_type": "ADS_COST",
+                    "amount":           str(abs(txn.amount).quantize(Q2, ROUND_HALF_UP)),
+                    "description":      "",
+                })
+
+        total_expense = (total_advertising + total_influencer).quantize(Q2, ROUND_HALF_UP)
+        total_advertising = total_advertising.quantize(Q2, ROUND_HALF_UP)
+        total_influencer  = total_influencer.quantize(Q2, ROUND_HALF_UP)
+
+        # ── Satış & kâr ────────────────────────────────────────────────
         items = OrderItem.objects.filter(order__in=orders).select_related(
             'product_variant', 'product_variant__product', 'order'
         ).prefetch_related('transactions')
-        
-        total_sales = Decimal("0.00")
+
+        total_sales  = Decimal("0.00")
         total_profit = Decimal("0.00")
-        
         for item in items:
             profit_info = ProfitCalculator.calculate_for_order_item(item)
-            total_sales += profit_info["gross_revenue"]
+            total_sales  += profit_info["gross_revenue"]
             total_profit += profit_info["net_profit"]
 
-        # Oranlar
-        ads_to_sales_ratio = Decimal("0.00")
-        ads_to_profit_ratio = Decimal("0.00")
+        total_sales  = total_sales.quantize(Q2, ROUND_HALF_UP)
+        total_profit = total_profit.quantize(Q2, ROUND_HALF_UP)
+
+        # ── Oranlar ───────────────────────────────────────────────────
+        advertising_sales_ratio  = Decimal("0.00")
+        advertising_profit_ratio = Decimal("0.00")
         if total_sales > Decimal("0.00"):
-            ads_to_sales_ratio = round(total_ads_cost / total_sales * Decimal("100"), 2)
+            advertising_sales_ratio = (total_expense / total_sales * Decimal("100")).quantize(Q2, ROUND_HALF_UP)
         if total_profit > Decimal("0.00"):
-            ads_to_profit_ratio = round(total_ads_cost / total_profit * Decimal("100"), 2)
+            advertising_profit_ratio = (total_expense / total_profit * Decimal("100")).quantize(Q2, ROUND_HALF_UP)
 
         return Response({
-            "ok": True,
             "data": {
-                "total_ads_cost": str(total_ads_cost),
-                "influencer_cost": str(influencer_cost),
-                "total_sales": str(total_sales),
-                "total_profit": str(total_profit),
-                "ads_to_sales_ratio": str(ads_to_sales_ratio),
-                "ads_to_profit_ratio": str(ads_to_profit_ratio),
+                "summary": {
+                    "total_advertising":        str(total_advertising),
+                    "total_influencer":         str(total_influencer),
+                    "total_expense":            str(total_expense),
+                    "total_sales":              str(total_sales),
+                    "total_profit":             str(total_profit),
+                    "advertising_sales_ratio":  str(advertising_sales_ratio),
+                    "advertising_profit_ratio": str(advertising_profit_ratio),
+                },
+                "transactions": transactions_list,
             }
         })
 
@@ -1705,7 +1785,7 @@ class LivePerformanceView(APIView):
             product_agg[pk]["category"] = category_name
 
             # Hourly aggregation
-            order_hour = timezone.localtime(order.order_date, tz_istanbul)
+            order_hour = order.order_date.replace(tzinfo=None)
             hour_key = order_hour.strftime("%H:00")
             hourly_data[hour_key]["revenue"] += order_sale
             hourly_data[hour_key]["profit"] += order_profit
@@ -1896,8 +1976,7 @@ class ProductProfitabilityView(APIView):
             order_date__gte=start_dt,
             order_date__lte=end_dt,
         ).prefetch_related(
-            'items__product_variant__product',
-            'items__transactions',
+            Prefetch('items', queryset=OrderItem.objects.select_related('order', 'product_variant__product').prefetch_related('transactions')),
         )
 
         # Aktif siparişler = satış sayılır; Returned/Cancelled/UnSupplied = iade kargo zararı
@@ -2052,9 +2131,11 @@ class ProductAnalysisView(APIView):
         except Exception:
             return Response({"error": "Organizasyon bulunamadı"}, status=400)
 
-        tz_istanbul = timezone.get_fixed_timezone(180)
+        import zoneinfo
         from datetime import datetime as dt_cls, time as dt_time, timedelta
         from collections import defaultdict
+
+        tz_istanbul = zoneinfo.ZoneInfo("Europe/Istanbul")
 
         # Accept both min_date/max_date and start_date/end_date for compatibility
         min_date_str = request.query_params.get("min_date") or request.query_params.get("start_date")
@@ -2067,103 +2148,84 @@ class ProductAnalysisView(APIView):
                     dt_cls.strptime(max_date_str, "%Y-%m-%d").date(), dt_time.max
                 ).replace(tzinfo=tz_istanbul)
             except ValueError:
-                min_date = timezone.localtime(timezone.now() - timedelta(days=30), tz_istanbul)
-                max_date = timezone.localtime(timezone.now(), tz_istanbul)
+                min_date = timezone.now() - timedelta(days=30)
+                max_date = timezone.now()
         else:
-            min_date = timezone.localtime(timezone.now() - timedelta(days=30), tz_istanbul)
-            max_date = timezone.localtime(timezone.now(), tz_istanbul)
+            min_date = timezone.now() - timedelta(days=30)
+            max_date = timezone.now()
+
+        SOLD_STATUSES     = {"Created", "Picking", "Shipped", "Delivered", "UnDelivered"}
+        RETURNED_STATUSES = {"Returned", "Cancelled", "UnSupplied"}
 
         orders_qs = Order.objects.filter(
             organization=org,
             order_date__gte=min_date,
             order_date__lte=max_date,
-        ).exclude(
-            status__in=["Cancelled", "Returned", "UnSupplied"]
         ).prefetch_related(
             'items__product_variant__product',
-            'items__transactions'
-        ).select_related('marketplace_account').order_by('order_date')
-
-        # Returned orders for return cargo loss calculation
-        returned_qs = Order.objects.filter(
-            organization=org,
-            order_date__gte=min_date,
-            order_date__lte=max_date,
-            status="Returned",
-        ).prefetch_related(
-            'items__product_variant__product',
-            'items__transactions'
+            'items__transactions',
         ).select_related('marketplace_account')
 
-        product_agg = defaultdict(lambda: {
-            "barcode": "",
-            "title": "",
-            "model_code": "",
-            "category": "",
-            "stock": 0,
-            "total_sold_quantity": 0,
-            "revenue": Decimal("0"),
-            "net_profit": Decimal("0"),
-            "return_cargo_loss": Decimal("0"),
-            "commission": Decimal("0"),
-            "cargo": Decimal("0"),
-            "tax": Decimal("0"),
-            "service_fee": Decimal("0"),
-            "cost": Decimal("0"),
-            "return_rate": Decimal("0"),
-            "trend": defaultdict(lambda: {"revenue": Decimal("0"), "profit": Decimal("0")}),
-        })
+        product_agg = {}
 
         for order in orders_qs:
-            calc = ProfitCalculator.calculate_for_order(order)
-            order_profit = calc["net_profit"]
-            order_sale = calc["total_sale"]
-            order_date_str = timezone.localtime(order.order_date, tz_istanbul).strftime("%Y-%m-%d")
-
-            fi = order.items.first()
-            if not fi or not fi.product_variant or not fi.product_variant.product:
+            is_sold     = order.status in SOLD_STATUSES
+            is_returned = order.status in RETURNED_STATUSES
+            if not is_sold and not is_returned:
                 continue
 
-            p = fi.product_variant.product
-            v = fi.product_variant
-            pk = p.barcode or p.marketplace_sku or p.title
+            order_date_str = order.order_date.replace(tzinfo=None).strftime("%Y-%m-%d")
 
-            agg = product_agg[pk]
-            if not agg["barcode"]:
-                agg["barcode"] = pk
-                agg["title"] = p.title
-                agg["model_code"] = v.marketplace_sku or p.marketplace_sku or ""
-                agg["category"] = p.category_name
-                agg["stock"] = p.current_stock
-                agg["return_rate"] = p.return_rate or Decimal("0")
+            for item in order.items.all():
+                variant = item.product_variant
+                if not variant or not variant.product:
+                    continue
+                p  = variant.product
+                pk = p.barcode or p.marketplace_sku or p.title
+                if not pk:
+                    continue
 
-            agg["total_sold_quantity"] += 1
-            agg["revenue"] += order_sale
-            agg["net_profit"] += order_profit
+                if pk not in product_agg:
+                    product_agg[pk] = {
+                        "barcode":            pk,
+                        "title":              p.title,
+                        "model_code":         variant.marketplace_sku or p.marketplace_sku or "",
+                        "category":           p.category_name or "",
+                        "stock":              p.current_stock,
+                        "return_rate":        p.return_rate or Decimal("0"),
+                        "total_sold_quantity": 0,
+                        "revenue":            Decimal("0"),
+                        "net_profit":         Decimal("0"),
+                        "return_cargo_loss":  Decimal("0"),
+                        "commission":         Decimal("0"),
+                        "cargo":              Decimal("0"),
+                        "tax":                Decimal("0"),
+                        "service_fee":        Decimal("0"),
+                        "cost":               Decimal("0"),
+                        "trend":              defaultdict(lambda: {"revenue": Decimal("0"), "profit": Decimal("0")}),
+                    }
 
-            agg["commission"] += calc["commission"]
-            agg["cargo"] += calc["cargo"]
-            agg["service_fee"] += calc["service_fee"]
-            agg["tax"] += calc.get("kdv_detail", {}).get("net_kdv", Decimal("0"))
-            agg["cost"] += calc["product_cost"] + calc.get("extra_product_cost", Decimal("0"))
+                try:
+                    calc = ProfitCalculator.calculate_for_order_item(item)
+                except Exception:
+                    continue
 
-            agg["trend"][order_date_str]["revenue"] += order_sale
-            agg["trend"][order_date_str]["profit"] += order_profit
+                bd = calc.get("breakdown", {})
 
-        # Accumulate return cargo loss from returned orders
-        for order in returned_qs:
-            fi = order.items.first()
-            if not fi or not fi.product_variant or not fi.product_variant.product:
-                continue
-
-            p = fi.product_variant.product
-            pk = p.barcode or p.marketplace_sku or p.title
-
-            # Only add to existing products (don't create new entries for returns-only products)
-            if pk in product_agg:
-                calc = ProfitCalculator.calculate_for_order(order)
-                cargo_loss = calc.get("cargo", Decimal("0"))
-                product_agg[pk]["return_cargo_loss"] += cargo_loss
+                if is_returned:
+                    cargo_loss = bd.get(FinancialTransactionType.SHIPPING_FEE.value, Decimal("0"))
+                    product_agg[pk]["return_cargo_loss"] += cargo_loss
+                else:
+                    product_agg[pk]["total_sold_quantity"] += item.quantity
+                    product_agg[pk]["revenue"]     += calc["gross_revenue"]
+                    product_agg[pk]["net_profit"]  += calc["net_profit"]
+                    product_agg[pk]["commission"]  += bd.get(FinancialTransactionType.COMMISSION.value, Decimal("0"))
+                    product_agg[pk]["cargo"]       += bd.get(FinancialTransactionType.SHIPPING_FEE.value, Decimal("0"))
+                    product_agg[pk]["service_fee"] += bd.get(FinancialTransactionType.SERVICE_FEE.value, Decimal("0"))
+                    product_agg[pk]["tax"]         += calc.get("kdv_detail", {}).get("net_kdv", Decimal("0"))
+                    product_agg[pk]["cost"]        += bd.get(FinancialTransactionType.PRODUCT_COST.value, Decimal("0"))
+                    product_agg[pk]["trend"][order_date_str]["revenue"] += calc["gross_revenue"]
+                    product_agg[pk]["trend"][order_date_str]["profit"]  += calc["net_profit"]
 
         max_sales = max([a["total_sold_quantity"] for a in product_agg.values()]) if product_agg else 1
         avg_sales = (sum([a["total_sold_quantity"] for a in product_agg.values()]) / len(product_agg)) if product_agg else 0

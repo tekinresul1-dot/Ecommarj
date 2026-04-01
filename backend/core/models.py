@@ -549,3 +549,39 @@ class ReturnClaim(TimestampedModel):
     def __str__(self):
         return f"Claim #{self.claim_id} - {self.claim_status}"
 
+
+# ---------------------------------------------------------------------------
+# 8. Ad Expenses (Reklam Giderleri)
+# ---------------------------------------------------------------------------
+
+class AdExpense(TimestampedModel):
+    """
+    Reklam giderleri — Trendyol finance API veya manuel giriş.
+    """
+    class ExpenseType(models.TextChoices):
+        ADVERTISING = "advertising", "Trendyol Reklam"
+        INFLUENCER  = "influencer",  "İnfluencer Gideri"
+        OTHER       = "other",       "Diğer"
+
+    organization        = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="ad_expenses")
+    marketplace_account = models.ForeignKey(MarketplaceAccount, on_delete=models.SET_NULL, null=True, blank=True)
+    transaction_date    = models.DateField("İşlem Tarihi")
+    transaction_type    = models.CharField("İşlem Tipi (API)", max_length=100, blank=True, default="")
+    amount              = models.DecimalField("Tutar", max_digits=12, decimal_places=2)
+    description         = models.TextField("Açıklama", blank=True, default="")
+    expense_type        = models.CharField(
+        "Gider Türü", max_length=20,
+        choices=ExpenseType.choices,
+        default=ExpenseType.ADVERTISING,
+    )
+    external_id         = models.CharField("Harici ID", max_length=255, blank=True, default="")
+    raw_payload         = models.JSONField("Ham Veri", default=dict, blank=True)
+
+    class Meta:
+        verbose_name          = "Reklam Gideri"
+        verbose_name_plural   = "Reklam Giderleri"
+        indexes = [models.Index(fields=["organization", "transaction_date"])]
+
+    def __str__(self):
+        return f"{self.get_expense_type_display()} — ₺{self.amount} ({self.transaction_date})"
+

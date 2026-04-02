@@ -5,18 +5,12 @@ from .models import (
     Organization,
     UserProfile,
     MarketplaceAccount,
-    Product,
-    ProductVariant,
-    Order,
-    OrderItem,
-    FinancialTransaction,
     CostRule,
     ExchangeRate,
     ProfitSnapshot,
     SyncJob,
     SyncCheckpoint,
     SyncAuditLog,
-    ReturnClaim,
 )
 
 User = get_user_model()
@@ -126,49 +120,8 @@ class MarketplaceAccountAdmin(admin.ModelAdmin):
 
 
 # ---------------------------------------------------------------------------
-# Product
-# ---------------------------------------------------------------------------
-
-class ProductVariantInline(admin.TabularInline):
-    model = ProductVariant
-    extra = 0
-
-
-@admin.register(Product)
-class ProductAdmin(admin.ModelAdmin):
-    list_display = ("title", "marketplace_sku", "organization", "marketplace_account", "is_active")
-    list_filter = ("is_active", "organization")
-    search_fields = ("title", "marketplace_sku", "barcode")
-    inlines = [ProductVariantInline]
-
-
-# ---------------------------------------------------------------------------
-# Order
-# ---------------------------------------------------------------------------
-
-class OrderItemInline(admin.TabularInline):
-    model = OrderItem
-    extra = 0
-
-
-@admin.register(Order)
-class OrderAdmin(admin.ModelAdmin):
-    list_display = ("marketplace_order_id", "package_id", "organization", "channel", "order_date", "status", "last_synced_at")
-    list_filter = ("status", "channel", "organization")
-    search_fields = ("marketplace_order_id", "package_id", "order_number")
-    readonly_fields = ("raw_payload_hash", "previous_status", "status_changed_at")
-    inlines = [OrderItemInline]
-
-
-# ---------------------------------------------------------------------------
 # Financial
 # ---------------------------------------------------------------------------
-
-@admin.register(FinancialTransaction)
-class FinancialTransactionAdmin(admin.ModelAdmin):
-    list_display = ("transaction_type", "amount", "currency", "organization", "occurred_at")
-    list_filter = ("transaction_type", "currency", "organization")
-
 
 @admin.register(CostRule)
 class CostRuleAdmin(admin.ModelAdmin):
@@ -211,14 +164,3 @@ class SyncAuditLogAdmin(admin.ModelAdmin):
     list_filter = ("sync_type", "sync_mode", "success")
     readonly_fields = ("error_message",)
     ordering = ("-started_at",)
-
-
-# ---------------------------------------------------------------------------
-# Returns
-# ---------------------------------------------------------------------------
-
-@admin.register(ReturnClaim)
-class ReturnClaimAdmin(admin.ModelAdmin):
-    list_display = ("claim_id", "order_number", "claim_status", "refund_amount", "claim_date")
-    list_filter = ("claim_status",)
-    search_fields = ("claim_id", "order_number")

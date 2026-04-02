@@ -80,6 +80,12 @@ async function tryRefreshToken(): Promise<string | null> {
     }
 }
 
+function handleSubscriptionRequired(): void {
+    if (typeof window !== "undefined" && window.location.pathname !== "/subscription") {
+        window.location.href = "/subscription";
+    }
+}
+
 function handleSessionExpired(): void {
     localStorage.removeItem("access_token");
     localStorage.removeItem("refresh_token");
@@ -146,6 +152,11 @@ export const api = {
             }
         }
 
+        if (res.status === 403) {
+            handleSubscriptionRequired();
+            throw new Error("Bu özelliğe erişmek için aktif bir abonelik gereklidir.");
+        }
+
         if (!res.ok) {
             const text = await res.text();
             console.error(`API Error on GET ${endpoint} (${res.status}): ${text.substring(0, 150)}`);
@@ -178,6 +189,11 @@ export const api = {
                 handleSessionExpired();
                 throw new Error("Oturum süresi doldu. Lütfen tekrar giriş yapın.");
             }
+        }
+
+        if (res.status === 403) {
+            handleSubscriptionRequired();
+            throw new Error("Bu özelliğe erişmek için aktif bir abonelik gereklidir.");
         }
 
         if (!res.ok) {
@@ -223,6 +239,11 @@ export const api = {
                 handleSessionExpired();
                 throw new Error("Oturum süresi doldu. Lütfen tekrar giriş yapın.");
             }
+        }
+
+        if (res.status === 403) {
+            handleSubscriptionRequired();
+            throw new Error("Bu özelliğe erişmek için aktif bir abonelik gereklidir.");
         }
 
         if (!res.ok) {

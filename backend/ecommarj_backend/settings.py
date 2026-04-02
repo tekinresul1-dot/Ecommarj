@@ -336,6 +336,11 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.trendyol_ad_expense_sync_all_accounts",
         "schedule": crontab(minute=30, hour="*/6"),
     },
+    # Her gece 02:00'da CHE finansal işlem senkronizasyonu
+    "che-financial-transactions-sync": {
+        "task": "core.tasks.sync_financial_transactions_task",
+        "schedule": crontab(minute=0, hour=2),
+    },
 }
 
 # ---------------------------------------------------------------------------

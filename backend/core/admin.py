@@ -11,6 +11,9 @@ from .models import (
     SyncJob,
     SyncCheckpoint,
     SyncAuditLog,
+    CargoPrice,
+    SubscriptionPlan,
+    UserSubscription,
 )
 
 User = get_user_model()
@@ -22,9 +25,9 @@ except admin.sites.NotRegistered:
     pass
 
 
-# ---------------------------------------------------------------------------
-# User Admin
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# AUTHENTICATION — User
+# ===========================================================================
 
 class UserProfileInline(admin.StackedInline):
     model = UserProfile
@@ -32,6 +35,71 @@ class UserProfileInline(admin.StackedInline):
     verbose_name_plural = "Profil"
     fields = ("organization", "phone", "company", "onboarding_status", "static_otp_code")
 
+
+class UserSubscriptionInline(admin.StackedInline):
+    model = UserSubscription
+    can_delete = False
+    verbose_name_plural = "Abonelik"
+    fields = ("plan", "status", "admin_override", "admin_override_reason", "trial_end", "current_period_end")
+    extra = 0
+
+
+@admin.register(User)
+class CustomUserAdmin(BaseUserAdmin):
+    inlines = (UserProfileInline, UserSubscriptionInline)
+    list_display = ("email", "is_active", "is_staff", "date_joined", "last_login", "has_marketplace", "static_otp_code_display")
+    list_editable = ("is_active",)
+    list_filter = ("is_active", "is_staff", "date_joined")
+    search_fields = ("email", "first_name", "last_name")
+    ordering = ("-date_joined",)
+
+    fieldsets = (
+        ("Giriş Bilgileri", {"fields": ("email", "password")}),
+        ("OTP Ayarı", {
+            "fields": ("static_otp_code_field",),
+            "description": "Dolu ise e-posta gönderilmez, bu sabit kod kullanılır.",
+        }),
+        ("Kişisel Bilgiler", {"fields": ("first_name", "last_name")}),
+        ("İzinler", {"fields": ("is_active", "is_staff", "is_superuser", "groups", "user_permissions")}),
+        ("Tarihler", {"fields": ("last_login", "date_joined")}),
+    )
+    readonly_fields = ("last_login", "date_joined", "static_otp_code_field")
+    add_fieldsets = (
+        (None, {
+            "classes": ("wide",),
+            "fields": ("email", "password1", "password2"),
+        }),
+    )
+
+    def get_readonly_fields(self, request, obj=None):
+        return ("last_login", "date_joined")
+
+    def static_otp_code_field(self, obj):
+        try:
+            return obj.profile.static_otp_code or "—"
+        except Exception:
+            return "—"
+    static_otp_code_field.short_description = "Sabit OTP Kodu (Profil'den düzenleyin)"
+
+    def has_marketplace(self, obj):
+        try:
+            return obj.profile.organization.marketplace_accounts.filter(is_active=True).exists()
+        except Exception:
+            return False
+    has_marketplace.short_description = "Pazaryeri"
+    has_marketplace.boolean = True
+
+    def static_otp_code_display(self, obj):
+        try:
+            return obj.profile.static_otp_code or "—"
+        except Exception:
+            return "—"
+    static_otp_code_display.short_description = "Sabit OTP"
+
+
+# ===========================================================================
+# Organization & UserProfile
+# ===========================================================================
 
 class MarketplaceAccountInline(admin.TabularInline):
     model = MarketplaceAccount
@@ -41,57 +109,12 @@ class MarketplaceAccountInline(admin.TabularInline):
     show_change_link = True
 
 
-@admin.register(User)
-class CustomUserAdmin(BaseUserAdmin):
-    inlines = (UserProfileInline,)
-    list_display = ("email", "is_active", "is_staff", "date_joined", "last_login", "has_marketplace_account", "static_otp_code_display")
-    list_filter = ("is_active", "is_staff", "date_joined")
-    search_fields = ("email", "first_name", "last_name")
-    ordering = ("-date_joined",)
-
-    fieldsets = (
-        (None, {"fields": ("email", "password")}),
-        ("Kişisel Bilgiler", {"fields": ("first_name", "last_name")}),
-        ("İzinler", {"fields": ("is_active", "is_staff", "is_superuser", "groups", "user_permissions")}),
-        ("Önemli Tarihler", {"fields": ("last_login", "date_joined")}),
-    )
-    add_fieldsets = (
-        (None, {
-            "classes": ("wide",),
-            "fields": ("email", "password1", "password2"),
-        }),
-    )
-
-    def has_marketplace_account(self, obj):
-        try:
-            return obj.profile.organization.marketplace_accounts.filter(is_active=True).exists()
-        except Exception:
-            return False
-    has_marketplace_account.short_description = "Pazaryeri Hesabı"
-    has_marketplace_account.boolean = True
-
-    def static_otp_code_display(self, obj):
-        try:
-            return obj.profile.static_otp_code or "-"
-        except Exception:
-            return "-"
-    static_otp_code_display.short_description = "Sabit OTP"
-
-
-# ---------------------------------------------------------------------------
-# Organization
-# ---------------------------------------------------------------------------
-
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
     list_display = ("name", "created_at")
     search_fields = ("name",)
     inlines = [MarketplaceAccountInline]
 
-
-# ---------------------------------------------------------------------------
-# UserProfile
-# ---------------------------------------------------------------------------
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
@@ -100,28 +123,70 @@ class UserProfileAdmin(admin.ModelAdmin):
     list_editable = ("static_otp_code",)
 
 
-# ---------------------------------------------------------------------------
-# MarketplaceAccount
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# MAĞAZA YÖNETİMİ — MarketplaceAccount
+# ===========================================================================
 
 @admin.register(MarketplaceAccount)
 class MarketplaceAccountAdmin(admin.ModelAdmin):
-    list_display = ("store_name", "organization", "channel", "seller_id", "api_key_preview", "is_active", "last_sync_at", "created_at")
-    list_filter = ("channel", "is_active", "organization")
-    search_fields = ("store_name", "seller_id", "organization__name")
-    list_editable = ("seller_id", "is_active")
+    list_display = ("user_email", "seller_id", "api_key_preview", "is_active", "created_at")
+    list_editable = ("is_active",)
+    list_filter = ("channel", "is_active")
+    search_fields = ("organization__users__user__email", "seller_id", "store_name")
     readonly_fields = ("last_sync_at", "created_at", "updated_at")
+
+    def user_email(self, obj):
+        try:
+            profile = obj.organization.users.select_related("user").first()
+            return profile.user.email if profile else obj.organization.name
+        except Exception:
+            return obj.organization.name
+    user_email.short_description = "Kullanıcı E-postası"
 
     def api_key_preview(self, obj):
         if obj.api_key:
-            return f"{obj.api_key[:8]}…"
-        return "-"
+            return f"{obj.api_key[:8]}..."
+        return "—"
     api_key_preview.short_description = "API Key"
 
 
-# ---------------------------------------------------------------------------
-# Financial
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# ABONELİK
+# ===========================================================================
+
+@admin.register(SubscriptionPlan)
+class SubscriptionPlanAdmin(admin.ModelAdmin):
+    list_display = ("name", "price", "interval", "is_active")
+    list_editable = ("price", "is_active")
+
+
+@admin.register(UserSubscription)
+class UserSubscriptionAdmin(admin.ModelAdmin):
+    list_display = ("user_email", "plan", "status", "admin_override", "trial_end", "current_period_end", "updated_at")
+    list_editable = ("status", "admin_override")
+    list_filter = ("status", "admin_override", "plan")
+    search_fields = ("user__email",)
+    fields = ("user", "plan", "status", "admin_override", "admin_override_reason", "trial_end", "current_period_end")
+
+    def user_email(self, obj):
+        return obj.user.email
+    user_email.short_description = "Kullanıcı"
+
+
+# ===========================================================================
+# FİYATLANDIRMA — CargoPrice
+# ===========================================================================
+
+@admin.register(CargoPrice)
+class CargoPriceAdmin(admin.ModelAdmin):
+    list_display = ("desi", "price", "cargo_provider", "is_active", "updated_at")
+    list_editable = ("price", "is_active")
+    ordering = ("desi",)
+
+
+# ===========================================================================
+# FİNANSAL (sadece genel tablolar)
+# ===========================================================================
 
 @admin.register(CostRule)
 class CostRuleAdmin(admin.ModelAdmin):
@@ -142,9 +207,9 @@ class ProfitSnapshotAdmin(admin.ModelAdmin):
     date_hierarchy = "date"
 
 
-# ---------------------------------------------------------------------------
-# Sync
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# SİSTEM — Sync
+# ===========================================================================
 
 @admin.register(SyncJob)
 class SyncJobAdmin(admin.ModelAdmin):

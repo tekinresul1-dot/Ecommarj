@@ -1,6 +1,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from core.permissions import IsSubscribed
 from django.utils import timezone
 from django.db import models as django_models
 from decimal import Decimal
@@ -54,7 +55,7 @@ class TriggerSyncView(APIView):
     Dashboard'dan manuel "Trendyol Senkronize Et" butonuna basıldığında tetiklenir.
     Kullanıcının Trendyol hesaplarını bulup Celery task'ine gönderir.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def post(self, request):
         user = request.user
@@ -88,7 +89,7 @@ class ProductStockSyncView(APIView):
     POST /api/products/sync-stock/
     Sadece ürün stok bilgilerini Trendyol'dan çeker ve günceller (sipariş/hakediş senkronizasyonu yapmaz).
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def post(self, request):
         from core.models import UserProfile
@@ -131,7 +132,7 @@ class DashboardOverviewView(APIView):
     Maliyetlendirilen Ciro = Sadece maliyeti tanımlı ürünlerin cirosu
     Kâr Tutarı = Maliyetlendirilen ciro üzerinden ProfitCalculator ile hesaplanan kâr
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         user = request.user
@@ -445,7 +446,7 @@ class ProductCostStatusView(APIView):
     GET /api/user/product-cost-status/
     Kullanıcının ürünlerin maliyet durumunu döndürür (popup için).
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         from core.models import Product, ProductVariant, MarketplaceAccount, UserProfile, Organization
@@ -484,7 +485,7 @@ class MockReportsView(APIView):
     """
     Diğer listeleme sayfaları için geçici endpoint (UI'ın çalışması adına boş veya mock liste döner)
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request, report_type):
         return Response({
@@ -498,7 +499,7 @@ class TrendyolTestConnectionView(APIView):
     POST /api/integrations/trendyol/test-connection/
     Trendyol bağlantısını test eder (1 ürün çekmeye çalışır).
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def post(self, request):
         import requests as http_requests
@@ -595,7 +596,7 @@ class TrendyolSaveCredentialsView(APIView):
     POST /api/integrations/trendyol/save-credentials/
     Kullanıcının Trendyol API Key, Secret ve Satıcı ID'sini veritabanına şifreli kaydeder.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         user = request.user
@@ -672,7 +673,7 @@ class ProductListView(APIView):
     GET /api/products/
     Veritabanına (Trendyol üzerinden) senkronize edilmiş ürünlerin tablo olarak dökümünü sağlar.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         user = request.user
@@ -862,7 +863,7 @@ class OrderListView(APIView):
     GET /api/orders/
     Sipariş listesini ve her siparişin detaylı kârlılık dökümünü döner.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         try:
@@ -965,7 +966,7 @@ class OrderExcelExportView(APIView):
     GET /api/orders/export-excel/
     Sipariş kârlılık verilerini Excel olarak dışa aktarır.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         try:
@@ -1100,7 +1101,7 @@ class CategoryAnalysisView(APIView):
     - Kargo sipariş bazlı hesaplanır (item bazlı değil) → çoklu item siparişlerde kargo 1× sayılır
     - Her item'ın satış payı oranında sipariş maliyetleri kategoriye dağıtılır
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         try:
@@ -1220,7 +1221,7 @@ class ReturnAnalysisView(APIView):
     GET /api/reports/returns/
     Sipariş bazlı iade/iptal analizi. Kargo zararı ve net zarar.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     # Kargo firması adını CarrierFlatRate'e eşler
     _flat_rate_cache: dict = {}
@@ -1402,7 +1403,7 @@ class ReturnLossView(APIView):
     getClaims API'den gelen iade kayıtlarını döndürür.
     Sadece aktif iade statüsleri: Accepted, WaitingInAction, Unresolved.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     ACTIVE_STATUSES = {"Accepted", "WaitingInAction", "Unresolved", "InProgress"}
 
@@ -1529,7 +1530,7 @@ class AdsAnalysisView(APIView):
     GET /api/reports/ads/
     Reklam analizi: filtrelenen tarih aralığında reklam harcamalarını, satış ve kâr verilerini döndürür.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         try:
@@ -1690,7 +1691,7 @@ class PayoutsView(APIView):
     GET /api/reports/payouts/
     Hakediş kontrol: PaymentOrder CHE işlemlerini döndürür.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         try:
@@ -1763,7 +1764,7 @@ class ProductExcelExportView(APIView):
     Mavi = Trendyol'dan otomatik doldurulur (salt okunur)
     Sarı  = Kullanıcı tarafından düzenlenir
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         from core.models import UserProfile, Product
@@ -1846,7 +1847,7 @@ class ProductExcelImportView(APIView):
     Desteklenen sütunlar: Ürün Maliyeti (KDV Dahil), Maliyet KDV Oranı, Ürün Desisi,
                           Ekstra Maliyet (%), Ekstra Maliyet (TL)
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def post(self, request):
         from core.models import UserProfile, ProductVariant
@@ -1989,7 +1990,7 @@ class LivePerformanceView(APIView):
     ürün heatmap'ini ve akıllı önerileri döndürür.
     Tüm finansal hesaplamalar backend'de Decimal ile yapılır.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         from core.models import UserProfile, Organization, ReturnClaim
@@ -2293,7 +2294,7 @@ class ProductProfitabilityView(APIView):
     Her variant barcode için satış tutarı, kâr, iade kargo zararı hesaplar.
     Params: start_date, end_date, search, sort_by, sort_desc
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         try:
@@ -2489,7 +2490,7 @@ class ProductProfitabilityView(APIView):
 
 
 class ProductAnalysisView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         try:
@@ -2684,7 +2685,7 @@ class ProductProfitabilityExcelExportView(APIView):
     GET /api/reports/product-profitability/export-excel/
     Ürün kârlılık verilerini Excel olarak dışa aktarır.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
         try:

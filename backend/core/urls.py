@@ -1,17 +1,18 @@
 from django.urls import path
 from .auth_views import (
     RegisterView, RegisterVerifyView, RegisterResendOTPView,
-    LoginView, MeView, SendOTPView, VerifyOTPView, UpdateOnboardingStatusView
+    LoginView, MeView, SendOTPView, VerifyOTPView, UpdateOnboardingStatusView,
+    GoogleLoginView,
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     DashboardOverviewView, MockReportsView, TriggerSyncView,
     ProductListView, OrderListView, ProductAnalysisView, ProductProfitabilityView,
     TrendyolTestConnectionView, TrendyolSaveCredentialsView,
-    CategoryAnalysisView, ReturnAnalysisView, AdsAnalysisView,
+    CategoryAnalysisView, ReturnAnalysisView, AdsAnalysisView, ReturnLossView,
     ProductExcelExportView, ProductExcelImportView, ProductStockSyncView,
     OrderExcelExportView, LivePerformanceView,
-    ProductProfitabilityExcelExportView,
+    ProductProfitabilityExcelExportView, PayoutsView, ProductCostStatusView,
 )
 from .sync_views import (
     TrendyolFullSyncView, TrendyolIncrementalSyncView,
@@ -25,6 +26,7 @@ urlpatterns = [
     path("auth/register/verify/", RegisterVerifyView.as_view(), name="auth-register-verify"),
     path("auth/register/resend-otp/", RegisterResendOTPView.as_view(), name="auth-register-resend"),
     path("auth/login/", LoginView.as_view(), name="auth-login"),
+    path("auth/google/", GoogleLoginView.as_view(), name="auth-google"),
     path("auth/send-otp/", SendOTPView.as_view(), name="auth-send-otp"),
     path("auth/verify-otp/", VerifyOTPView.as_view(), name="auth-verify-otp"),
     path("auth/me/", MeView.as_view(), name="auth-me"),
@@ -64,7 +66,9 @@ urlpatterns = [
     path("reports/product-profitability/export-excel/", ProductProfitabilityExcelExportView.as_view(), name="product-profitability-export"),
     path("reports/categories/", CategoryAnalysisView.as_view(), name="category-analysis"),
     path("reports/returns/", ReturnAnalysisView.as_view(), name="return-analysis"),
+    path("reports/return-loss/", ReturnLossView.as_view(), name="return-loss"),
     path("reports/ads/", AdsAnalysisView.as_view(), name="ads-analysis"),
+    path("user/product-cost-status/", ProductCostStatusView.as_view(), name="product-cost-status"),
+    path("reports/payouts/", PayoutsView.as_view(), name="payouts"),
     path("reports/<str:report_type>/", MockReportsView.as_view(), name="reports-mock"),
 ]
-

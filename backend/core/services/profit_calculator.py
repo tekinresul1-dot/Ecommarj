@@ -79,13 +79,32 @@ FALLBACK_CARGO_RATES_KDV_DAHIL = {
 }
 
 
+_CARRIER_FLAT_RATE_CACHE: dict | None = None
+
 def _get_carrier_flat_rate(carrier: str) -> Decimal:
-    """DB'deki CarrierFlatRate'i okur; bulunamazsa FALLBACK dict'e düşer."""
-    try:
-        from core.models import CarrierFlatRate
-        return CarrierFlatRate.objects.get(carrier_name=carrier).rate_kdv_dahil
-    except Exception:
-        return FALLBACK_CARGO_RATES_KDV_DAHIL.get(carrier, Decimal("85.00"))
+    """Tüm CarrierFlatRate kayıtlarını ilk çağrıda önbellekler, sonra dict'ten okur."""
+    global _CARRIER_FLAT_RATE_CACHE
+    if _CARRIER_FLAT_RATE_CACHE is None:
+        try:
+            from core.models import CarrierFlatRate
+            _CARRIER_FLAT_RATE_CACHE = {r.carrier_name: r.rate_kdv_dahil for r in CarrierFlatRate.objects.all()}
+        except Exception:
+            _CARRIER_FLAT_RATE_CACHE = {}
+    return _CARRIER_FLAT_RATE_CACHE.get(carrier) or FALLBACK_CARGO_RATES_KDV_DAHIL.get(carrier, Decimal("85.00"))
+
+
+_CARGO_PRICING_CACHE: dict | None = None
+
+def _get_cargo_pricing_cache() -> dict:
+    """Tüm CargoPricing kayıtlarını ilk çağrıda önbellekler."""
+    global _CARGO_PRICING_CACHE
+    if _CARGO_PRICING_CACHE is None:
+        try:
+            from core.models import CargoPricing
+            _CARGO_PRICING_CACHE = {(r.carrier_name, r.desi): r for r in CargoPricing.objects.all()}
+        except Exception:
+            _CARGO_PRICING_CACHE = {}
+    return _CARGO_PRICING_CACHE
 
 
 class ProfitCalculator:
@@ -226,8 +245,26 @@ class ProfitCalculator:
             elif tx.transaction_type == FinancialTransactionType.SHIPPING_FEE.value:
                 cargo_cost = abs(tx.amount)
                 
-        # Komisyon ve KDV: sipariş satırındaki snapshot verileri öncelikli
-        if order_item.applied_commission_rate and order_item.applied_commission_rate > Decimal("0.00"):
+        # Komisyon: CHE Sale transaction'ından gerçek değeri kullan (varsa)
+        try:
+            from core.models import CheTransaction
+            order_num = order_item.order.order_number or order_item.order.marketplace_order_id or ""
+            barcode = order_item.sku or ""
+            che_sale = CheTransaction.objects.filter(
+                account=order_item.order.marketplace_account,
+                source=CheTransaction.SOURCE_SETTLEMENTS,
+                order_number=order_num,
+            )
+            if barcode:
+                che_sale = che_sale.filter(barcode=barcode)
+            che_sale = che_sale.first()
+            if che_sale and che_sale.commission_rate and che_sale.commission_rate > Decimal("0"):
+                commission_rate = che_sale.commission_rate
+        except Exception:
+            pass
+
+        # Komisyon ve KDV: sipariş satırındaki snapshot verileri öncelikli (fallback)
+        if commission_rate == Decimal("0.00") and order_item.applied_commission_rate and order_item.applied_commission_rate > Decimal("0.00"):
             commission_rate = order_item.applied_commission_rate
         if order_item.applied_vat_rate and order_item.applied_vat_rate > Decimal("0.00"):
             vat_rate = order_item.applied_vat_rate
@@ -283,14 +320,26 @@ class ProfitCalculator:
                         cargo_cost = barem_price_kdv_haric * Decimal("1.20")
                         barem_applied = True
 
-                # Barem desteğine uygun değilse veya taşıyıcı listede yoksa normal veritabanından(Excel) çek
+                # Barem desteğine uygun değilse veya taşıyıcı listede yoksa:
+                # Önce CargoPrice tablosuna bak (admin'den yönetilebilir), sonra eski tablolara düş
                 if not barem_applied:
-                    try:
-                        pricing = CargoPricing.objects.get(carrier_name=carrier, desi=active_desi)
-                        # KDV Hariç fiyat üzerine %20 ekleyerek Gross kargo bedeli
-                        cargo_cost = pricing.price_without_vat * Decimal("1.20")
-                    except CargoPricing.DoesNotExist:
-                        cargo_cost = _get_carrier_flat_rate(carrier)
+                    cargo_price_found = False
+                    if active_desi is not None:
+                        try:
+                            from core.models import CargoPrice
+                            desi_int = int(active_desi)
+                            cp = CargoPrice.objects.get(desi=desi_int, is_active=True)
+                            cargo_cost = cp.price
+                            cargo_price_found = True
+                        except Exception:
+                            pass
+                    if not cargo_price_found:
+                        pricing = _get_cargo_pricing_cache().get((carrier, active_desi))
+                        if pricing:
+                            # KDV Hariç fiyat üzerine %20 ekleyerek Gross kargo bedeli
+                            cargo_cost = pricing.price_without_vat * Decimal("1.20")
+                        else:
+                            cargo_cost = _get_carrier_flat_rate(carrier)
 
         result = ProfitCalculator.calculate_from_raw(
             sale_price_gross=sale_price_gross,
@@ -317,7 +366,7 @@ class ProfitCalculator:
         def q(val: Decimal) -> Decimal:
             return val.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-        items = list(order.items.all())
+        items = list(order.items.select_related('order', 'product_variant__product').prefetch_related('transactions').all())
 
         # ── Step 1: Per-item aggregations (komisyon, maliyet, stopaj, kısmi KDV) ──
         total_sale       = Decimal("0")

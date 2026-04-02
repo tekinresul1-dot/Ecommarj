@@ -208,6 +208,23 @@ def trendyol_ad_expense_sync_all_accounts():
     return f"Dispatched {dispatched} ad expense syncs"
 
 
+@shared_task
+def sync_financial_transactions_task():
+    """CHE (Cari Hesap Ekstresi) finansal işlemlerini tüm aktif hesaplar için senkronize eder."""
+    from core.models import MarketplaceAccount
+    from core.services.financial_sync import sync_financials_for_account
+    accounts = MarketplaceAccount.objects.filter(is_active=True, channel="trendyol")
+    results = []
+    for account in accounts:
+        try:
+            result = sync_financials_for_account(account, days_back=15)
+            results.append(f"{account.seller_id}: inserted={result['inserted']} updated={result['updated']}")
+        except Exception as e:
+            logger.error(f"[FinancialSync] Failed for {account.seller_id}: {e}")
+            results.append(f"{account.seller_id}: ERROR {e}")
+    return " | ".join(results)
+
+
 # Legacy task - still used by existing sync trigger views
 @shared_task
 def sync_all_trendyol_data_task(account_id: str):

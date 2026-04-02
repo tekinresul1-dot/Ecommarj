@@ -669,3 +669,85 @@ class CheTransaction(TimestampedModel):
     def __str__(self):
         return f"{self.transaction_type} — {self.transaction_id}"
 
+
+# ---------------------------------------------------------------------------
+# Cargo Price Table
+# ---------------------------------------------------------------------------
+
+class CargoPrice(models.Model):
+    """Admin'den yönetilebilen desi bazlı kargo fiyat tablosu."""
+    desi = models.IntegerField("Desi", unique=True)
+    price = models.DecimalField("Fiyat (KDV Dahil, TL)", max_digits=10, decimal_places=2)
+    cargo_provider = models.CharField("Kargo Firması", max_length=100, default="Yurtiçi Kargo")
+    is_active = models.BooleanField("Aktif", default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["desi"]
+        verbose_name = "Kargo Fiyatı"
+        verbose_name_plural = "Kargo Fiyatları"
+
+    def __str__(self):
+        return f"Desi-{self.desi}: ₺{self.price}"
+
+
+# ---------------------------------------------------------------------------
+# Subscription
+# ---------------------------------------------------------------------------
+
+class SubscriptionPlan(models.Model):
+    name = models.CharField("Plan Adı", max_length=100)
+    price = models.DecimalField("Fiyat", max_digits=10, decimal_places=2)
+    interval = models.CharField("Periyot", max_length=20, default="monthly")
+    is_active = models.BooleanField("Aktif", default=True)
+
+    class Meta:
+        verbose_name = "Abonelik Planı"
+        verbose_name_plural = "Abonelik Planları"
+
+    def __str__(self):
+        return f"{self.name} — ₺{self.price}/{self.interval}"
+
+
+class UserSubscription(models.Model):
+    STATUS_CHOICES = [
+        ("active", "Aktif"),
+        ("cancelled", "İptal"),
+        ("past_due", "Gecikmiş"),
+        ("trialing", "Deneme"),
+        ("admin_override", "Admin Kontrolü"),
+    ]
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="usersubscription",
+    )
+    plan = models.ForeignKey(
+        SubscriptionPlan,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="subscriptions",
+    )
+    status = models.CharField(
+        "Durum", max_length=50, choices=STATUS_CHOICES, default="trialing"
+    )
+    admin_override = models.BooleanField("Admin Erişimi", default=False)
+    admin_override_reason = models.TextField("Admin Notu", blank=True)
+    trial_end = models.DateTimeField("Deneme Bitiş", null=True, blank=True)
+    current_period_end = models.DateTimeField("Dönem Bitiş", null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Kullanıcı Aboneliği"
+        verbose_name_plural = "Kullanıcı Abonelikleri"
+
+    def __str__(self):
+        return f"{self.user.email} — {self.status}"
+
+    def is_access_allowed(self):
+        if self.admin_override:
+            return True
+        return self.status in ("active", "trialing", "admin_override")

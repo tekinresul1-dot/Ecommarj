@@ -378,6 +378,26 @@ export default function RegisterPage() {
                                 "Hesap Oluştur"
                             )}
                         </button>
+
+                        <div className="pt-1">
+                            <div className="flex items-center gap-3 mb-4">
+                                <div className="h-px flex-1 bg-white/10" />
+                                <span className="text-[11px] uppercase tracking-[0.24em] text-white/30">
+                                    Alternatif Başlangıç
+                                </span>
+                                <div className="h-px flex-1 bg-white/10" />
+                            </div>
+
+                            <Link
+                                href="/google-giris"
+                                className="w-full h-12 rounded-xl border border-white/10 bg-white/5 hover:bg-white/7 hover:border-white/20 text-white font-medium transition-all flex items-center justify-center gap-3"
+                            >
+                                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-[#4285F4] text-sm font-bold">
+                                    G
+                                </span>
+                                Google ile Kayıt / Giriş
+                            </Link>
+                        </div>
                     </form>
 
                     <p className="mt-6 text-center text-sm text-white/50">

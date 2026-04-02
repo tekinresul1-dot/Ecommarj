@@ -112,6 +112,12 @@ class LoginSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)
 
 
+class GoogleLoginSerializer(serializers.Serializer):
+    """Google Identity token giriş serializer'ı."""
+
+    id_token = serializers.CharField(write_only=True)
+
+
 class UserSerializer(serializers.ModelSerializer):
     """Kullanıcı bilgi serializer'ı."""
 

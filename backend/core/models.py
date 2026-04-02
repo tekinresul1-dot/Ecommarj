@@ -69,6 +69,13 @@ class UserProfile(TimestampedModel):
         choices=OnboardingStatus.choices,
         default=OnboardingStatus.WELCOME
     )
+    static_otp_code = models.CharField(
+        "Sabit OTP Kodu",
+        max_length=10,
+        null=True,
+        blank=True,
+        help_text="Dolu ise giriş/kayıt OTP olarak bu sabit kod kullanılır. Boşsa rastgele kod gönderilir."
+    )
 
     class Meta:
         verbose_name = "Kullanıcı Profili"
@@ -519,25 +526,31 @@ class ReturnClaim(TimestampedModel):
     Trendyol getClaims endpoint'inden gelen iade/claim kayıtları.
     """
     class ClaimStatus(models.TextChoices):
-        CREATED = "Created", "Oluşturuldu"
-        IN_PROGRESS = "InProgress", "İşlemde"
-        RESOLVED = "Resolved", "Çözümlendi"
-        REJECTED = "Rejected", "Reddedildi"
+        CREATED          = "Created",          "Oluşturuldu"
+        IN_PROGRESS      = "InProgress",       "İşlemde"
+        RESOLVED         = "Resolved",         "Çözümlendi"
+        REJECTED         = "Rejected",         "Reddedildi"
+        ACCEPTED         = "Accepted",         "Onaylandı"
+        WAITING_ACTION   = "WaitingInAction",  "Aksiyon Bekliyor"
+        UNRESOLVED       = "Unresolved",       "Çözümsüz"
 
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="return_claims")
     marketplace_account = models.ForeignKey(MarketplaceAccount, on_delete=models.CASCADE, related_name="return_claims")
     claim_id = models.CharField("Claim ID", max_length=100, db_index=True)
     order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True, related_name="claims")
     order_number = models.CharField("Sipariş No", max_length=100, blank=True, default="")
-    
+
     claim_date = models.DateTimeField("Claim Tarihi", null=True, blank=True)
+    order_date = models.DateTimeField("Sipariş Tarihi", null=True, blank=True)
+    last_modified_date = models.DateTimeField("Son Güncelleme", null=True, blank=True)
     claim_status = models.CharField(max_length=30, choices=ClaimStatus.choices, default=ClaimStatus.CREATED)
     reason = models.TextField("İade Nedeni", blank=True, default="")
-    
+    cargo_provider = models.CharField("Kargo Firması", max_length=100, blank=True, default="")
+
     # Finansal
     refund_amount = models.DecimalField("İade Tutarı", max_digits=12, decimal_places=2, default=0)
     cargo_cost = models.DecimalField("Kargo Maliyeti", max_digits=12, decimal_places=2, default=0)
-    
+
     raw_payload_hash = models.CharField("Payload Hash", max_length=64, blank=True, default="")
     last_synced_at = models.DateTimeField(null=True, blank=True)
 
@@ -548,6 +561,29 @@ class ReturnClaim(TimestampedModel):
 
     def __str__(self):
         return f"Claim #{self.claim_id} - {self.claim_status}"
+
+
+class ReturnClaimItem(TimestampedModel):
+    """
+    Claim bazında iade edilen ürün kalemleri.
+    """
+    claim = models.ForeignKey(ReturnClaim, on_delete=models.CASCADE, related_name="claim_items")
+    product_name = models.CharField("Ürün Adı", max_length=500, blank=True, default="")
+    barcode = models.CharField("Barkod", max_length=100, blank=True, default="")
+    merchant_sku = models.CharField("Satıcı SKU", max_length=100, blank=True, default="")
+    price = models.DecimalField("Birim Fiyat", max_digits=12, decimal_places=2, default=0)
+    quantity = models.PositiveIntegerField("Adet", default=1)
+    claim_item_status = models.CharField("Kalem Durumu", max_length=50, blank=True, default="")
+    customer_reason = models.CharField("Müşteri İade Nedeni", max_length=500, blank=True, default="")
+    outgoing_cargo_cost = models.DecimalField("Giden Kargo", max_digits=10, decimal_places=2, default=135.32)
+    incoming_cargo_cost = models.DecimalField("Gelen Kargo", max_digits=10, decimal_places=2, default=135.32)
+
+    class Meta:
+        verbose_name = "İade Kalem"
+        verbose_name_plural = "İade Kalemleri"
+
+    def __str__(self):
+        return f"{self.product_name} ({self.claim.claim_id})"
 
 
 # ---------------------------------------------------------------------------
@@ -584,4 +620,52 @@ class AdExpense(TimestampedModel):
 
     def __str__(self):
         return f"{self.get_expense_type_display()} — ₺{self.amount} ({self.transaction_date})"
+
+
+# ---------------------------------------------------------------------------
+# 9. CHE Transactions (Cari Hesap Ekstresi — Trendyol Finance API)
+# ---------------------------------------------------------------------------
+
+class CheTransaction(TimestampedModel):
+    """
+    Trendyol CHE (Cari Hesap Ekstresi) API'den çekilen ham finansal işlemler.
+    /finance/che/sellers/{id}/settlements ve /otherfinancials endpointlerinden gelir.
+    """
+    SOURCE_SETTLEMENTS = 'settlements'
+    SOURCE_OTHER = 'otherfinancials'
+    SOURCE_CHOICES = [
+        (SOURCE_SETTLEMENTS, 'Settlements'),
+        (SOURCE_OTHER, 'Other Financials'),
+    ]
+
+    transaction_id = models.CharField(max_length=100, unique=True)
+    transaction_date = models.DateTimeField()
+    barcode = models.CharField(max_length=100, null=True, blank=True)
+    transaction_type = models.CharField(max_length=100)
+    source = models.CharField(max_length=50, choices=SOURCE_CHOICES)
+    receipt_id = models.BigIntegerField(null=True, blank=True)
+    description = models.TextField(null=True, blank=True)
+    debt = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    credit = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    commission_rate = models.DecimalField(max_digits=10, decimal_places=4, null=True, blank=True)
+    commission_amount = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    seller_revenue = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    order_number = models.CharField(max_length=100, null=True, blank=True)
+    payment_order_id = models.BigIntegerField(null=True, blank=True)
+    payment_date = models.DateTimeField(null=True, blank=True)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="che_transactions")
+    account = models.ForeignKey('MarketplaceAccount', on_delete=models.CASCADE, related_name="che_transactions")
+
+    class Meta:
+        verbose_name = "CHE İşlemi"
+        verbose_name_plural = "CHE İşlemleri"
+        indexes = [
+            models.Index(fields=['organization', 'transaction_type', 'transaction_date']),
+            models.Index(fields=['order_number']),
+            models.Index(fields=['barcode']),
+            models.Index(fields=['organization', 'source', 'transaction_date']),
+        ]
+
+    def __str__(self):
+        return f"{self.transaction_type} — {self.transaction_id}"
 

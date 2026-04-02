@@ -195,8 +195,8 @@ class DashboardOverviewView(APIView):
 
         # Toplam Ciro: Aktif sipariş kalemlerinin sale_price_net toplamı
         # Ürün maliyet uyarısı için sayım (filtre öncesi)
-        from core.models import ProductVariant
-        _total_org_products = Product.objects.filter(organization=org).count()
+        from core.models import ProductVariant, Product as ProductModel
+        _total_org_products = ProductModel.objects.filter(organization=org).count()
         _products_with_cost = ProductVariant.objects.filter(
             product__organization=org,
             cost_price__isnull=False,

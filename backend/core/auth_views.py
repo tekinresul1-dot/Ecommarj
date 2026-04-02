@@ -2,19 +2,29 @@
 Auth views for EcomMarj — register, login, me.
 """
 
+import logging
+import secrets
+
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
+from django.conf import settings
+from django.core.cache import cache
+from django.core.mail import send_mail
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 
-from .auth_serializers import RegisterSerializer, LoginSerializer, UserSerializer
-import secrets
-from django.core.cache import cache
-from django.core.mail import send_mail
-from django.conf import settings
+from core.models import Organization, UserProfile
+from .auth_serializers import RegisterSerializer, LoginSerializer, GoogleLoginSerializer, UserSerializer
+
+
+logger = logging.getLogger(__name__)
+
+
 def _get_tokens_for_user(user):
     """Generate JWT token pair for a user."""
     refresh = RefreshToken.for_user(user)
@@ -22,6 +32,33 @@ def _get_tokens_for_user(user):
         "refresh": str(refresh),
         "access": str(refresh.access_token),
     }
+
+
+def _build_company_name(first_name: str, last_name: str) -> str:
+    full_name = f"{first_name} {last_name}".strip()
+    return full_name or "EcomMarj Kullanıcısı"
+
+
+def _ensure_user_profile(user: User, *, company_name: str = "", phone: str = "") -> None:
+    profile = getattr(user, "profile", None)
+    resolved_company = company_name.strip() or _build_company_name(user.first_name, user.last_name)
+
+    if profile and profile.organization:
+        organization = profile.organization
+        if company_name.strip():
+            organization.name = resolved_company
+            organization.save(update_fields=["name"])
+    else:
+        organization = Organization.objects.create(name=resolved_company)
+
+    UserProfile.objects.update_or_create(
+        user=user,
+        defaults={
+            "organization": organization,
+            "phone": phone,
+            "company": company_name.strip(),
+        },
+    )
 
 
 class RegisterView(APIView):
@@ -204,6 +241,103 @@ class LoginView(APIView):
         )
 
 
+class GoogleLoginView(APIView):
+    """POST /api/auth/google/ — Google ile giriş yap."""
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = GoogleLoginSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({"errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not settings.GOOGLE_OAUTH_CLIENT_IDS:
+            logger.error("Google OAuth client id is not configured.")
+            return Response(
+                {"error": "Google ile giriş şu anda yapılandırılmamış."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            token_info = google_id_token.verify_oauth2_token(
+                serializer.validated_data["id_token"],
+                google_requests.Request(),
+                audience=None,
+            )
+        except Exception as exc:
+            logger.warning("Google token verification failed: %s", exc)
+            return Response(
+                {"error": "Google doğrulaması başarısız oldu. Lütfen tekrar deneyin."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        audience = str(token_info.get("aud") or "").strip()
+        if audience not in settings.GOOGLE_OAUTH_CLIENT_IDS:
+            return Response(
+                {"error": "Geçersiz Google uygulama kimliği."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if not token_info.get("email_verified"):
+            return Response(
+                {"error": "Google hesabınızın e-posta adresi doğrulanmış olmalıdır."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        email = str(token_info.get("email") or "").lower().strip()
+        if not email:
+            return Response({"error": "Google hesabında e-posta bilgisi bulunamadı."}, status=status.HTTP_400_BAD_REQUEST)
+
+        given_name = str(token_info.get("given_name") or "").strip()
+        family_name = str(token_info.get("family_name") or "").strip()
+        full_name = str(token_info.get("name") or "").strip()
+
+        if not given_name and full_name:
+            name_parts = full_name.split(" ", 1)
+            given_name = name_parts[0]
+            family_name = name_parts[1] if len(name_parts) > 1 else ""
+
+        user = User.objects.filter(email=email).first()
+        if user:
+            updated_fields = []
+            if not user.first_name and given_name:
+                user.first_name = given_name
+                updated_fields.append("first_name")
+            if not user.last_name and family_name:
+                user.last_name = family_name
+                updated_fields.append("last_name")
+            if not user.username:
+                user.username = email
+                updated_fields.append("username")
+            if not user.is_active:
+                user.is_active = True
+                updated_fields.append("is_active")
+            if updated_fields:
+                user.save(update_fields=updated_fields)
+        else:
+            user = User.objects.create_user(
+                username=email,
+                email=email,
+                first_name=given_name,
+                last_name=family_name,
+                is_active=True,
+            )
+            user.set_unusable_password()
+            user.save(update_fields=["password"])
+
+        _ensure_user_profile(user)
+        tokens = _get_tokens_for_user(user)
+
+        return Response(
+            {
+                "message": "Google ile giriş başarılı.",
+                "user": UserSerializer(user).data,
+                "tokens": tokens,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class MeView(APIView):
     """GET /api/auth/me/ — mevcut kullanıcı bilgisi."""
 
@@ -219,9 +353,6 @@ class SendOTPView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        import logging
-        logger = logging.getLogger(__name__)
-
         email = request.data.get("email")
         if not email:
             return Response({"error": "E-posta gereklidir."}, status=status.HTTP_400_BAD_REQUEST)
@@ -234,7 +365,18 @@ class SendOTPView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        otp_code = f"{secrets.randbelow(900000) + 100000}"
+        # Kullanıcıya sabit OTP kodu atanmışsa onu kullan
+        try:
+            from core.models import UserProfile
+            profile = UserProfile.objects.get(user__email=email)
+            static_code = profile.static_otp_code
+        except UserProfile.DoesNotExist:
+            static_code = None
+
+        if static_code:
+            otp_code = static_code
+        else:
+            otp_code = f"{secrets.randbelow(900000) + 100000}"
 
         # OTP'yi cache'e yaz (Redis). Başarısız olursa 503 dön.
         try:

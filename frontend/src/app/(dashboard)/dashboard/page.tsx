@@ -8,7 +8,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend, FunnelChart, Funnel, LabelList
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, DollarSign, Package, AlertCircle, ShoppingCart, Info, RefreshCw
+  TrendingUp, TrendingDown, DollarSign, Package, AlertCircle, ShoppingCart, Info, RefreshCw, AlertTriangle, X, ArrowRight
 } from "lucide-react";
 import clsx from "clsx";
 import { api } from "@/lib/api";
@@ -31,12 +31,23 @@ function DashboardContent() {
   const [error, setError] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<string | null>(null);
+  const [costWarning, setCostWarning] = useState<{ products_without_cost: number; total_products: number } | null>(null);
+  const [costWarningVisible, setCostWarningVisible] = useState(false);
+  const [costWarningMounted, setCostWarningMounted] = useState(false);
 
   const channel = searchParams.get("channel") || "trendyol";
+
+  const dismissCostWarning = () => {
+    setCostWarningVisible(false);
+    setTimeout(() => setCostWarningMounted(false), 500);
+  };
 
   const fetchData = async () => {
     setLoading(true);
     setError("");
+    // Maliyet uyarısını her yenilemede sıfırla
+    setCostWarningMounted(false);
+    setCostWarningVisible(false);
     try {
       const json = await api.get(`/dashboard/overview/?${searchParams.toString()}`);
       setData(json);
@@ -50,6 +61,25 @@ function DashboardContent() {
 
   useEffect(() => {
     fetchData();
+  }, [searchParams]);
+
+  // Maliyet uyarısı: sayfa yüklenince veya searchParams değişince çek
+  useEffect(() => {
+    api.get("/user/product-cost-status/")
+      .then((res: any) => {
+        if (!res.has_costs && res.total_products > 0) {
+          setCostWarning({ products_without_cost: res.products_without_cost, total_products: res.total_products });
+          setCostWarningMounted(true);
+          // Slide-down animasyonu için kısa gecikme
+          setTimeout(() => setCostWarningVisible(true), 50);
+          // 10 saniye sonra otomatik kapat
+          setTimeout(() => {
+            setCostWarningVisible(false);
+            setTimeout(() => setCostWarningMounted(false), 500);
+          }, 10000);
+        }
+      })
+      .catch(() => {});
   }, [searchParams]);
 
   const handleSync = async () => {
@@ -142,6 +172,32 @@ function DashboardContent() {
       </div>
 
       <GlobalFilter />
+
+      {/* Maliyet Uyarısı Banner */}
+      {costWarningMounted && costWarning && (
+        <div
+          className={clsx(
+            "flex items-center gap-3 px-4 py-3 rounded-xl border border-orange-500/40 bg-orange-500/10 text-sm transition-all duration-500",
+            costWarningVisible
+              ? "opacity-100 translate-y-0"
+              : "opacity-0 -translate-y-3 pointer-events-none"
+          )}
+        >
+          <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0" />
+          <span className="text-orange-200 flex-1">
+            <span className="font-semibold text-orange-300">{costWarning.products_without_cost} ürününüzün</span> maliyeti girilmemiş. Karlılık verileri hesaplanamıyor.
+          </span>
+          <button
+            onClick={() => { dismissCostWarning(); window.location.href = "/products"; }}
+            className="flex items-center gap-1 px-3 py-1 rounded-lg bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 font-semibold text-xs transition-colors shrink-0 border border-orange-500/30"
+          >
+            Maliyet Gir <ArrowRight className="w-3 h-3" />
+          </button>
+          <button onClick={dismissCostWarning} className="text-orange-400/60 hover:text-orange-300 transition-colors shrink-0">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* 5 KPIs Row */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">

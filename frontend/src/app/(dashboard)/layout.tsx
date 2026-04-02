@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Sidebar } from "@/components/dashboard/Sidebar";
 import { Topbar } from "@/components/dashboard/Topbar";
 import OnboardingWizard from "@/components/onboarding/OnboardingWizard";
+import GlobalCostPopup from "@/components/dashboard/GlobalCostPopup";
 import { api } from "@/lib/api";
 import "flag-icons/css/flag-icons.min.css";
 
@@ -45,6 +46,7 @@ export default function DashboardLayout({
 
     return (
         <div className="min-h-screen bg-[#070B14] selection:bg-accent-500/30 font-sans">
+            <GlobalCostPopup />
             {onboardingStatus && onboardingStatus !== "COMPLETED" && (
                 <OnboardingWizard 
                     initialStatus={onboardingStatus}

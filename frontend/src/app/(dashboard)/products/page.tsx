@@ -69,6 +69,13 @@ function SortIcon({ columnKey, sortConfig }: { columnKey: SortKey; sortConfig: S
         : <ArrowDown size={13} className="ml-1 text-orange-400 inline-block" />;
 }
 
+function hasNoCost(product: Product): boolean {
+    if (!product.variants || product.variants.length === 0) return true;
+    return product.variants.every(
+        (v) => !v.cost_price || parseFloat(v.cost_price) === 0
+    );
+}
+
 function getTrendyolUrl(product: Product): string {
     if (product.trendyol_content_id) {
         return `https://www.trendyol.com/p-${product.trendyol_content_id}`;
@@ -543,7 +550,11 @@ export default function ProductsPage() {
                                                                         )}
                                                                     </div>
                                                                     <div className="min-w-0 flex-1">
-                                                                        <div className="font-medium text-slate-300 text-[12px] truncate line-clamp-2 leading-tight" title={child.title}>{child.title}</div>
+                                                                        <div className="font-medium text-slate-300 text-[12px] truncate line-clamp-2 leading-tight" title={child.title}>{child.title}{hasNoCost(child) && (
+                                                                            <span className="ml-1.5 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange-500/15 text-orange-400 border border-orange-500/30">
+                                                                                Maliyet Yok
+                                                                            </span>
+                                                                        )}</div>
                                                                     </div>
                                                                 </div>
                                                             </TableCell>

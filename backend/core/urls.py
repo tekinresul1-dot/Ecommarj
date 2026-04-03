@@ -13,6 +13,7 @@ from .views import (
     ProductExcelExportView, ProductExcelImportView, ProductStockSyncView,
     OrderExcelExportView, LivePerformanceView,
     ProductProfitabilityExcelExportView, PayoutsView, ProductCostStatusView,
+    InitiatePaymentView, PayTRCallbackView, PaymentHistoryView, SubscriptionPlansView,
 )
 from .sync_views import (
     TrendyolFullSyncView, TrendyolIncrementalSyncView,
@@ -71,4 +72,9 @@ urlpatterns = [
     path("user/product-cost-status/", ProductCostStatusView.as_view(), name="product-cost-status"),
     path("reports/payouts/", PayoutsView.as_view(), name="payouts"),
     path("reports/<str:report_type>/", MockReportsView.as_view(), name="reports-mock"),
+    # Payments & Subscription
+    path("payments/initiate/", InitiatePaymentView.as_view(), name="payment-initiate"),
+    path("payments/callback/", PayTRCallbackView.as_view(), name="payment-callback"),
+    path("payments/history/", PaymentHistoryView.as_view(), name="payment-history"),
+    path("subscription/plans/", SubscriptionPlansView.as_view(), name="subscription-plans"),
 ]

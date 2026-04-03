@@ -14,6 +14,7 @@ from .models import (
     CargoPrice,
     SubscriptionPlan,
     UserSubscription,
+    Payment,
 )
 
 User = get_user_model()
@@ -167,6 +168,22 @@ class UserSubscriptionAdmin(admin.ModelAdmin):
     list_filter = ("status", "admin_override", "plan")
     search_fields = ("user__email",)
     fields = ("user", "plan", "status", "admin_override", "admin_override_reason", "trial_end", "current_period_end")
+
+    def user_email(self, obj):
+        return obj.user.email
+    user_email.short_description = "Kullanıcı"
+
+
+# ===========================================================================
+# ÖDEMELER
+# ===========================================================================
+
+@admin.register(Payment)
+class PaymentAdmin(admin.ModelAdmin):
+    list_display = ("user_email", "plan", "amount", "status", "merchant_oid", "created_at")
+    list_filter = ("status",)
+    search_fields = ("user__email", "merchant_oid")
+    readonly_fields = ("merchant_oid", "paytr_token", "paytr_response", "created_at", "updated_at")
 
     def user_email(self, obj):
         return obj.user.email

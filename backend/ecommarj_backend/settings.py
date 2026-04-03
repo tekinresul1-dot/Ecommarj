@@ -359,3 +359,9 @@ if not DEBUG:
     SECURE_HSTS_SECONDS = 31536000  # 1 year
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
+
+# PayTR Sanal Pos
+PAYTR_MERCHANT_ID = os.getenv("PAYTR_MERCHANT_ID", "")
+PAYTR_MERCHANT_KEY = os.getenv("PAYTR_MERCHANT_KEY", "")
+PAYTR_MERCHANT_SALT = os.getenv("PAYTR_MERCHANT_SALT", "")
+PAYTR_TEST_MODE = os.getenv("PAYTR_TEST_MODE", "True").lower() in ("true", "1", "yes")

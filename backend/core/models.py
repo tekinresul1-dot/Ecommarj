@@ -700,6 +700,10 @@ class SubscriptionPlan(models.Model):
     price = models.DecimalField("Fiyat", max_digits=10, decimal_places=2)
     interval = models.CharField("Periyot", max_length=20, default="monthly")
     is_active = models.BooleanField("Aktif", default=True)
+    order_limit = models.IntegerField("Aylık Sipariş Limiti", default=1000)
+    store_limit = models.IntegerField("Mağaza Limiti", default=1)
+    plan_tier = models.CharField("Plan Kademesi", max_length=50, default="starter")  # starter/business/enterprise
+    yearly_total = models.DecimalField("Yıllık Toplam Tutar", max_digits=10, decimal_places=2, null=True, blank=True)
 
     class Meta:
         verbose_name = "Abonelik Planı"
@@ -751,3 +755,41 @@ class UserSubscription(models.Model):
         if self.admin_override:
             return True
         return self.status in ("active", "trialing", "admin_override")
+
+
+# ---------------------------------------------------------------------------
+# Payment
+# ---------------------------------------------------------------------------
+
+class Payment(models.Model):
+    STATUS_CHOICES = [
+        ("pending", "Bekliyor"),
+        ("success", "Başarılı"),
+        ("failed", "Başarısız"),
+        ("refunded", "İade Edildi"),
+    ]
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="payments"
+    )
+    subscription = models.ForeignKey(
+        "UserSubscription", on_delete=models.SET_NULL, null=True, blank=True, related_name="payments"
+    )
+    plan = models.ForeignKey(
+        "SubscriptionPlan", on_delete=models.SET_NULL, null=True, blank=True, related_name="payments"
+    )
+    amount = models.DecimalField("Tutar", max_digits=10, decimal_places=2)
+    currency = models.CharField("Para Birimi", max_length=3, default="TRY")
+    status = models.CharField("Durum", max_length=20, choices=STATUS_CHOICES, default="pending")
+    merchant_oid = models.CharField("Sipariş No (PayTR)", max_length=200, unique=True)
+    paytr_token = models.CharField("PayTR Token", max_length=500, null=True, blank=True)
+    paytr_response = models.JSONField("PayTR Yanıtı", null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Ödeme"
+        verbose_name_plural = "Ödemeler"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user.email} — ₺{self.amount} ({self.status})"

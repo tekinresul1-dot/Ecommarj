@@ -643,6 +643,16 @@ class TrendyolSaveCredentialsView(APIView):
         if not supplier_id:
             return Response({"error": "Satıcı ID (Supplier ID) zorunludur."}, status=400)
 
+        # Mağaza limiti kontrolü — sadece yeni mağaza ekleniyorsa kontrol et
+        from core.services.subscription_service import check_store_limit
+        existing_account = MarketplaceAccount.objects.filter(
+            organization=org, channel=MarketplaceAccount.Channel.TRENDYOL
+        ).exists()
+        if not existing_account:
+            allowed, msg = check_store_limit(request.user)
+            if not allowed:
+                return Response({"error": msg, "upgrade_url": "/subscription"}, status=403)
+
         account, created = MarketplaceAccount.objects.update_or_create(
             organization=org,
             channel=MarketplaceAccount.Channel.TRENDYOL,
@@ -2844,3 +2854,148 @@ class ProductProfitabilityExcelExportView(APIView):
         )
         response["Content-Disposition"] = 'attachment; filename="Urun_Karliligi.xlsx"'
         return response
+
+
+# ---------------------------------------------------------------------------
+# Payment Views
+# ---------------------------------------------------------------------------
+
+class InitiatePaymentView(APIView):
+    """POST /api/payments/initiate/ — PayTR ödeme token'ı oluştur."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from core.models import SubscriptionPlan, Payment
+        from core.services.paytr_service import PayTRService
+
+        plan_id = request.data.get("plan_id")
+        if not plan_id:
+            return Response({"error": "plan_id zorunludur."}, status=400)
+
+        try:
+            plan = SubscriptionPlan.objects.get(id=plan_id, is_active=True)
+        except SubscriptionPlan.DoesNotExist:
+            return Response({"error": "Plan bulunamadı."}, status=404)
+
+        import time, random
+        tmp_oid = f"TEMP_{request.user.id}_{int(time.time())}_{random.randint(100,999)}"
+        payment = Payment.objects.create(
+            user=request.user,
+            plan=plan,
+            amount=plan.price,
+            status="pending",
+            merchant_oid=tmp_oid,
+        )
+
+        user_ip = (
+            request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
+            or request.META.get("REMOTE_ADDR", "1.1.1.1")
+        )
+
+        paytr = PayTRService()
+        try:
+            merchant_oid, token = paytr.create_payment_token(
+                payment=payment,
+                user=request.user,
+                user_ip=user_ip,
+                callback_url=request.build_absolute_uri("/api/payments/callback/"),
+                success_url=request.build_absolute_uri("/payment/success/"),
+                fail_url=request.build_absolute_uri("/payment/fail/"),
+            )
+            payment.merchant_oid = merchant_oid
+            payment.paytr_token = token
+            payment.save()
+            return Response({"token": token, "merchant_oid": merchant_oid})
+        except Exception as e:
+            payment.delete()
+            return Response({"error": str(e)}, status=400)
+
+
+class PayTRCallbackView(APIView):
+    """POST /api/payments/callback/ — PayTR'den gelen ödeme sonucu."""
+    permission_classes = []
+    authentication_classes = []
+
+    def post(self, request):
+        from django.http import HttpResponse
+        from core.models import Payment, UserSubscription
+        from core.services.paytr_service import PayTRService
+
+        paytr = PayTRService()
+        post_data = request.POST.dict()
+
+        if not paytr.verify_callback(post_data):
+            return HttpResponse("PAYTR_ERROR")
+
+        merchant_oid = post_data.get("merchant_oid", "")
+        status = post_data.get("status", "")
+
+        try:
+            payment = Payment.objects.select_related("plan", "user").get(merchant_oid=merchant_oid)
+            payment.paytr_response = post_data
+            if status == "success":
+                payment.status = "success"
+                payment.save()
+                # Aboneliği aktif et
+                from django.utils import timezone
+                from dateutil.relativedelta import relativedelta
+                sub, _ = UserSubscription.objects.get_or_create(user=payment.user)
+                sub.plan = payment.plan
+                sub.status = "active"
+                sub.admin_override = False
+                if payment.plan and payment.plan.interval == "yearly":
+                    sub.current_period_end = timezone.now() + relativedelta(years=1)
+                else:
+                    sub.current_period_end = timezone.now() + relativedelta(months=1)
+                sub.save()
+            else:
+                payment.status = "failed"
+                payment.save()
+        except Payment.DoesNotExist:
+            pass
+
+        return HttpResponse("OK")
+
+
+class PaymentHistoryView(APIView):
+    """GET /api/payments/history/ — kullanıcının ödeme geçmişi."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from core.models import Payment
+        payments = Payment.objects.filter(user=request.user).select_related("plan").order_by("-created_at")[:20]
+        data = [
+            {
+                "id": p.id,
+                "plan": p.plan.name if p.plan else "—",
+                "amount": str(p.amount),
+                "status": p.status,
+                "merchant_oid": p.merchant_oid,
+                "created_at": p.created_at.strftime("%d.%m.%Y %H:%M"),
+            }
+            for p in payments
+        ]
+        return Response(data)
+
+
+class SubscriptionPlansView(APIView):
+    """GET /api/subscription/plans/ — aktif abonelik planlarını listele."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from core.models import SubscriptionPlan
+        plans = SubscriptionPlan.objects.filter(is_active=True).order_by("plan_tier", "interval")
+        data = [
+            {
+                "id": p.id,
+                "name": p.name,
+                "price": str(p.price),
+                "interval": p.interval,
+                "plan_tier": p.plan_tier,
+                "order_limit": p.order_limit,
+                "store_limit": p.store_limit,
+                "yearly_total": str(p.yearly_total) if p.yearly_total else None,
+            }
+            for p in plans
+        ]
+        return Response(data)

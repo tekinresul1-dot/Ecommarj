@@ -8,26 +8,39 @@ import { api } from "@/lib/api";
 
 export function Topbar({ setMobileNavOpen }: { setMobileNavOpen: (v: boolean) => void }) {
     const [userMenuOpen, setUserMenuOpen] = useState(false);
-    const [userData, setUserData] = useState<{ first_name: string, email: string } | null>(null);
+    const [userData, setUserData] = useState<{ name: string, email: string } | null>(null);
+    const [userLoading, setUserLoading] = useState(true);
     const router = useRouter();
 
     useEffect(() => {
-        // Profil bilgisini çek
+        // localStorage'dan anlık göster (layout zaten çekip kaydetti)
+        const cached = localStorage.getItem("user");
+        if (cached) {
+            try {
+                setUserData(JSON.parse(cached));
+                setUserLoading(false);
+            } catch { /* ignore */ }
+        }
+
         const fetchUser = async () => {
             const token = localStorage.getItem("access_token");
             if (!token) {
+                setUserLoading(false);
                 router.push("/giris");
                 return;
             }
             try {
                 const data = await api.get("/auth/me/");
                 setUserData(data);
+                localStorage.setItem("user", JSON.stringify(data));
             } catch (err) {
                 console.error("Topbar fetchUser failed:", err);
+            } finally {
+                setUserLoading(false);
             }
         };
         fetchUser();
-    }, [router]);
+    }, []);
 
     const handleLogout = () => {
         localStorage.removeItem("access_token");
@@ -72,11 +85,11 @@ export function Topbar({ setMobileNavOpen }: { setMobileNavOpen: (v: boolean) =>
                         >
                             <span className="sr-only">Kullanıcı menüsünü aç</span>
                             <div className="h-8 w-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold">
-                                {userData?.first_name ? userData.first_name.charAt(0).toUpperCase() : <User className="h-4 w-4" />}
+                                {userData ? (userData.name || userData.email || "?").charAt(0).toUpperCase() : <User className="h-4 w-4" />}
                             </div>
                             <span className="hidden lg:flex lg:items-center">
                                 <span className="ml-3 text-sm font-medium leading-6 text-white" aria-hidden="true">
-                                    {userData?.first_name || "Yükleniyor..."}
+                                    {userLoading ? "Yükleniyor..." : (userData?.name || userData?.email?.split("@")[0] || "Kullanıcı")}
                                 </span>
                             </span>
                         </button>
@@ -84,7 +97,7 @@ export function Topbar({ setMobileNavOpen }: { setMobileNavOpen: (v: boolean) =>
                         {userMenuOpen && (
                             <div className="absolute right-0 z-10 mt-2.5 w-48 origin-top-right rounded-xl bg-navy-900 border border-white/10 py-2 shadow-lg ring-1 ring-black/5 focus:outline-none">
                                 <div className="px-4 py-2 border-b border-white/5 mb-1 pb-2">
-                                    <p className="text-sm font-medium text-white truncate">{userData?.first_name}</p>
+                                    <p className="text-sm font-medium text-white truncate">{userData?.name || userData?.email?.split("@")[0]}</p>
                                     <p className="text-xs text-white/50 truncate mt-0.5">{userData?.email}</p>
                                 </div>
                                 <Link href="/settings" className="block px-4 py-2 text-sm leading-6 text-white/70 hover:text-white hover:bg-white/5 mx-1 rounded-md transition-colors">

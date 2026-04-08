@@ -2019,6 +2019,10 @@ class LivePerformanceView(APIView):
             profile.organization = org
             profile.save()
 
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"[LivePerf] user={user.id}/{user.username} org={org.id}/{org.name} params={dict(request.query_params)}")
+
         # ── Date range (default: today) ──
         min_date_str = request.query_params.get("min_date")
         max_date_str = request.query_params.get("max_date")
@@ -2046,7 +2050,7 @@ class LivePerformanceView(APIView):
             order_date__gte=min_date,
             order_date__lte=max_date,
         ).exclude(
-            status__in=["Cancelled", "Returned", "UnSupplied"]
+            status__in=NON_SALE_STATUSES
         ).prefetch_related(
             'items__product_variant__product',
             'items__transactions'
@@ -2157,8 +2161,8 @@ class LivePerformanceView(APIView):
             product_agg[pk]["return_rate"] = return_rate
             product_agg[pk]["category"] = category_name
 
-            # Hourly aggregation
-            order_hour = order.order_date.replace(tzinfo=None)
+            # Hourly aggregation (Istanbul timezone)
+            order_hour = order.order_date.astimezone(tz_istanbul)
             hour_key = order_hour.strftime("%H:00")
             hourly_data[hour_key]["revenue"] += order_sale
             hourly_data[hour_key]["profit"] += order_profit

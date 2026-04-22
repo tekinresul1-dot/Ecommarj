@@ -27,7 +27,24 @@
       "Bash(bash /Users/candemir/Desktop/EcomPro/deploy_return_loss.sh 2>&1)",
       "Bash(grep -r \"91.98.226\\\\|SSH\\\\|ssh\\\\|SERVER_PASS\\\\|ROOT_PASS\" /Users/candemir/Desktop/EcomPro/.env* /Users/candemir/Desktop/EcomPro/backend/.env*)",
       "Bash(ssh-copy-id:*)",
-      "Bash(brew list:*)"
+      "Bash(brew list:*)",
+      "Bash(docker exec ecompro-backend-1 python manage.py shell -c ':*)",
+      "Bash(docker exec ecompro-backend-1:*)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/live-performance/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8000/api/live-performance/ -H \"Authorization: Bearer test\")",
+      "Bash(curl -s http://localhost:8000/live-performance/)",
+      "Bash(curl -s 'http://localhost:8000/api/live-performance/?min_date=2026-04-07&max_date=2026-04-07' -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzc1NjExOTQxLCJpYXQiOjE3NzU1ODMxNDEsImp0aSI6IjIxNTJkZGZmZGRlMDQyMWJhMTk0YzI0MGEzZDk2OTMyIiwidXNlcl9pZCI6IjEifQ.F4LmnHIVq00kQkoh4nmAZqxT0qeqsUhd3Pbt3oPC0eE')",
+      "Bash(python3 -c \"import sys, json; d=json.load\\(sys.stdin\\); print\\('order_count:', d['kpis']['order_count'], 'revenue:', d['kpis']['total_revenue']\\)\")",
+      "Bash(curl -s http://localhost:8000/nonexistent/ -H \"Accept: application/json\")",
+      "Bash(curl -s http://localhost:8000/live-performance/ -H \"Accept: application/json\")",
+      "Bash(docker-compose up:*)",
+      "Bash(docker network:*)",
+      "Bash(python3 -c \"import sys, json; d=json.load\\(sys.stdin\\); containers = d[0]['Containers']; [print\\(f\\\\\"{v['Name']}: {v['IPv4Address']}\\\\\"\\) for v in containers.values\\(\\)]\")",
+      "Bash(docker-compose restart:*)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:v for k,v in d.items\\(\\) if k in ['username','first_name','last_name','email']}, ensure_ascii=False\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('Via nginx - order_count:', d['kpis']['order_count'], 'revenue:', d['kpis']['total_revenue']\\)\")",
+      "Bash(docker-compose build:*)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost/)"
     ]
   }
 }

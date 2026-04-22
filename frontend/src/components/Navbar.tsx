@@ -41,7 +41,7 @@ export default function Navbar() {
                         E
                     </div>
                     <span className="text-xl font-bold text-white tracking-tight">
-                        Ecom<span className="gradient-text-blue">Pro</span>
+                        Ecom<span className="gradient-text-blue">Marj</span>
                     </span>
                 </Link>
 

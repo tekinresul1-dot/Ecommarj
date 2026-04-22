@@ -132,7 +132,8 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_name(self, obj):
-        return f"{obj.first_name} {obj.last_name}".strip()
+        full_name = f"{obj.first_name} {obj.last_name}".strip()
+        return full_name or obj.username or obj.email.split("@")[0]
 
     def get_phone(self, obj):
         profile = getattr(obj, "profile", None)

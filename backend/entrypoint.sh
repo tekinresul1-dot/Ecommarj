@@ -55,7 +55,7 @@ else:
 echo "🚀 Web Sunucusu Başlatılıyor..."
 if [ "$DJANGO_DEBUG" = "False" ] || [ "$DJANGO_DEBUG" = "false" ]; then
     echo "Running production server via Gunicorn..."
-    exec gunicorn ecommarj_backend.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120
+    exec gunicorn ecommarj_backend.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120 --access-logfile -
 else
     echo "Running development server via Django runserver..."
     exec python manage.py runserver 0.0.0.0:8000

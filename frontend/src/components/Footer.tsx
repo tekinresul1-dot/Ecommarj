@@ -50,7 +50,7 @@ export default function Footer() {
                                 E
                             </div>
                             <span className="text-lg font-bold text-white">
-                                Ecom<span className="gradient-text-blue">Pro</span>
+                                Ecom<span className="gradient-text-blue">Marj</span>
                             </span>
                         </Link>
                         <p className="text-sm text-white/60 leading-relaxed mb-5">

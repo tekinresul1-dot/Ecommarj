@@ -205,13 +205,14 @@ function LivePerformanceContent() {
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   // Filters state
+  const todayIstanbul = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Istanbul" });
   const [dateFrom, setDateFrom] = useState(() => {
     const p = searchParams.get("min_date");
-    return p || new Date().toISOString().slice(0, 10);
+    return p || todayIstanbul;
   });
   const [dateTo, setDateTo] = useState(() => {
     const p = searchParams.get("max_date");
-    return p || new Date().toISOString().slice(0, 10);
+    return p || todayIstanbul;
   });
   const [productSearch, setProductSearch] = useState(searchParams.get("product") || "");
   const [categorySearch, setCategorySearch] = useState(searchParams.get("category") || "");
@@ -268,7 +269,7 @@ function LivePerformanceContent() {
   };
 
   const handleClearFilters = () => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date().toLocaleDateString("sv-SE", { timeZone: "Europe/Istanbul" });
     setDateFrom(today);
     setDateTo(today);
     setProductSearch("");
@@ -488,10 +489,10 @@ function LivePerformanceContent() {
                 <Tooltip
                   contentStyle={{ backgroundColor: "#0f172a", borderColor: "#1e293b", borderRadius: "8px", fontSize: "12px" }}
                   labelStyle={{ color: "#94a3b8" }}
-                  formatter={(value: any, name?: string) => [
+                  formatter={(value: any, name: any) => [
                     formatTR(value),
                     name === "revenue" ? "Ciro" : name === "profit" ? "Kâr" : "Sipariş"
-                  ]}
+                  ] as [string, string]}
                 />
                 <Area type="monotone" dataKey="revenue" stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#colorHourlyRevenue)" name="revenue" />
                 <Area type="monotone" dataKey="profit" stroke="#22c55e" strokeWidth={2.5} fillOpacity={1} fill="url(#colorHourlyProfit)" name="profit" />

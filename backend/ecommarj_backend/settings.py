@@ -382,6 +382,21 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.sync_financial_transactions_task",
         "schedule": crontab(minute=0, hour=2),
     },
+    # Her gece 00:00 — bitişi geçmiş abonelikleri expired yap
+    "subscriptions-expire-overdue": {
+        "task": "core.tasks.expire_overdue_subscriptions_task",
+        "schedule": crontab(minute=0, hour=0),
+    },
+    # Her gece 09:00 — 3 gün içinde sona erecek aboneliklere bilgilendirme
+    "subscriptions-notify-expiring": {
+        "task": "core.tasks.notify_expiring_subscriptions_task",
+        "schedule": crontab(minute=0, hour=9),
+    },
+    # Her gece 01:00 — 7+ gün gecikmiş ödemesi olanların erişimini kes
+    "subscriptions-cut-overdue-payments": {
+        "task": "core.tasks.cut_access_for_overdue_payments_task",
+        "schedule": crontab(minute=0, hour=1),
+    },
 }
 
 # ---------------------------------------------------------------------------

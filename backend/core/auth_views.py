@@ -232,6 +232,54 @@ class RegisterResendOTPView(APIView):
         return Response({"message": "Doğrulama kodu tekrar gönderildi."}, status=status.HTTP_200_OK)
 
 
+FAIL_LOCKOUT_THRESHOLD = 5
+FAIL_LOCKOUT_MINUTES = 15
+
+
+def _client_ip(request) -> str:
+    xff = request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
+    return xff or request.META.get("REMOTE_ADDR", "0.0.0.0")
+
+
+def _is_locked_out(user) -> bool:
+    """Aktif (locked_until > now) bir AccountLockout var mı?"""
+    try:
+        from core.models import AccountLockout
+        from django.utils import timezone as _tz
+        return AccountLockout.objects.filter(user=user, locked_until__gt=_tz.now()).exists()
+    except Exception:
+        return False
+
+
+def _record_attempt(user, ip, success, attempt_type="password"):
+    try:
+        from core.models import LoginAttempt
+        LoginAttempt.objects.create(user=user, ip_address=ip, success=success, attempt_type=attempt_type)
+    except Exception:
+        pass
+
+
+def _maybe_lock_account(user, ip, reason="Çok fazla başarısız giriş denemesi"):
+    """Son 15 dakikadaki başarısız deneme >= eşik ise hesabı kilitle."""
+    try:
+        from datetime import timedelta as _td
+        from django.utils import timezone as _tz
+        from core.models import LoginAttempt, AccountLockout
+        window_start = _tz.now() - _td(minutes=FAIL_LOCKOUT_MINUTES)
+        fails = LoginAttempt.objects.filter(
+            user=user, success=False, attempted_at__gte=window_start,
+        ).count()
+        if fails >= FAIL_LOCKOUT_THRESHOLD:
+            AccountLockout.objects.create(
+                user=user,
+                locked_until=_tz.now() + _td(minutes=FAIL_LOCKOUT_MINUTES),
+                reason=reason,
+                failed_attempts=fails,
+            )
+    except Exception:
+        pass
+
+
 class LoginView(APIView):
     """POST /api/auth/login/ — giriş yap."""
 
@@ -248,23 +296,45 @@ class LoginView(APIView):
 
         email = serializer.validated_data["email"].lower()
         password = serializer.validated_data["password"]
+        ip = _client_ip(request)
 
-        # Django default User uses username for auth, we use email as username
+        # Hesabı bul (varsa) — lockout/log kaydı için bilinmesi gerekir
+        user_obj = User.objects.filter(email=email).first()
+
+        # Aktif kilit varsa direkt reddet (kullanıcı kayıtlıysa)
+        if user_obj and _is_locked_out(user_obj):
+            return Response(
+                {"errors": {"non_field_errors": [
+                    "Çok fazla başarısız giriş denemesi. Hesabınız 15 dakika kilitlendi."
+                ]}},
+                status=status.HTTP_423_LOCKED,
+            )
+
         user = None
-        try:
-            user_obj = User.objects.get(email=email)
+        if user_obj:
             user = authenticate(username=user_obj.username, password=password)
-        except User.DoesNotExist:
-            pass  # user stays None → 401 below
 
         if user is None:
+            # Başarısız denemeyi kaydet ve eşik aşıldıysa kilitle
+            _record_attempt(user_obj, ip, success=False)
+            if user_obj:
+                _maybe_lock_account(user_obj, ip)
             return Response(
                 {"errors": {"non_field_errors": ["E-posta veya şifre hatalı."]}},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        tokens = _get_tokens_for_user(user)
+        # Başarılı — log + last_login_ip
+        _record_attempt(user, ip, success=True)
+        try:
+            from core.models import UserProfile
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+            profile.last_login_ip = ip
+            profile.save(update_fields=["last_login_ip"])
+        except Exception:
+            pass
 
+        tokens = _get_tokens_for_user(user)
         return Response(
             {
                 "message": "Giriş başarılı.",
@@ -273,6 +343,54 @@ class LoginView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class AccessCodeLoginView(APIView):
+    """POST /api/auth/access-code/ — admin tarafından üretilmiş kodla giriş.
+
+    OTP zorunluluğu yok; ancak `validate_code` 5 yanlışta IP başına 15dk kilit
+    uygular ve hesap askıdaysa giriş yine reddedilir."""
+    permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
+
+    def post(self, request):
+        code = (request.data or {}).get("code", "")
+        ip = _client_ip(request)
+        from core.services.access_code_service import validate_code
+        ac, err = validate_code(code, ip=ip)
+        if err:
+            _record_attempt(None, ip, success=False, attempt_type="access_code")
+            return Response({"error": err}, status=status.HTTP_401_UNAUTHORIZED)
+
+        user = ac.user
+        if not user.is_active:
+            return Response({"error": "Hesap pasif durumda."}, status=status.HTTP_403_FORBIDDEN)
+        profile = getattr(user, "profile", None)
+        if profile and profile.is_suspended:
+            return Response(
+                {"error": f"Hesabınız askıya alındı: {profile.suspension_reason or '—'}"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if _is_locked_out(user):
+            return Response(
+                {"error": "Hesap geçici olarak kilitli. 15 dakika sonra tekrar deneyin."},
+                status=status.HTTP_423_LOCKED,
+            )
+
+        _record_attempt(user, ip, success=True, attempt_type="access_code")
+        if profile:
+            try:
+                profile.last_login_ip = ip
+                profile.save(update_fields=["last_login_ip"])
+            except Exception:
+                pass
+
+        tokens = _get_tokens_for_user(user)
+        return Response({
+            "message": "Kod ile giriş başarılı.",
+            "user": UserSerializer(user).data,
+            "tokens": tokens,
+        }, status=status.HTTP_200_OK)
 
 
 class GoogleLoginView(APIView):

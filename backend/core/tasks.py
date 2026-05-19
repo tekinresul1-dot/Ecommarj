@@ -261,3 +261,83 @@ def sync_all_trendyol_data_task(account_id: str):
     except Exception as e:
         logger.error(f"Sync failed for account {account_id}: {e}")
         raise ValueError(str(e))
+
+
+# ============================================================================
+# Yönetici paneli — abonelik yaşam döngüsü task'ları (Celery Beat)
+# ============================================================================
+
+@shared_task
+def expire_overdue_subscriptions_task():
+    """Her gece 00:00 — bitişi geçmiş abonelikleri 'expired' yap."""
+    from core.services.subscription_service import expire_overdue_subscriptions
+    count = expire_overdue_subscriptions()
+    logger.info(f"[Beat] expired={count} subscriptions")
+    return count
+
+
+@shared_task
+def notify_expiring_subscriptions_task(days_ahead: int = 3):
+    """Süresi `days_ahead` gün içinde dolacak aboneler için bilgilendirme
+    e-postası gönderir. Sadece aktif/trial ve admin_override olmayanlar."""
+    from datetime import timedelta
+    from django.conf import settings as dj_settings
+    from django.core.mail import send_mail
+    from django.utils import timezone
+    from core.models import UserSubscription
+
+    horizon = timezone.now() + timedelta(days=days_ahead)
+    qs = (
+        UserSubscription.objects
+        .select_related("user", "plan")
+        .filter(
+            status__in=("active", "trial", "trialing"),
+            admin_override=False,
+            end_date__isnull=False,
+            end_date__lte=horizon,
+            end_date__gt=timezone.now(),
+        )
+    )
+    sent = 0
+    from_email = getattr(dj_settings, "DEFAULT_FROM_EMAIL", "info@ecommarj.com")
+    for sub in qs:
+        try:
+            user_email = sub.user.email
+            if not user_email:
+                continue
+            subject = "EcomMarj — Aboneliğiniz yakında sona eriyor"
+            body = (
+                f"Merhaba {sub.user.get_full_name() or user_email},\n\n"
+                f"Aboneliğiniz {sub.end_date:%d.%m.%Y %H:%M} tarihinde sona erecek.\n"
+                "Erişim kaybı yaşamamak için panelden yenileyebilirsiniz:\n"
+                "https://ecommarj.com/subscription\n\n"
+                "İyi günler,\nEcomMarj"
+            )
+            send_mail(subject, body, from_email, [user_email], fail_silently=True)
+            sent += 1
+        except Exception as e:
+            logger.warning("[Beat] expiring-notify failed for %s: %s", sub.user_id, e)
+    logger.info(f"[Beat] expiring-notify sent={sent}")
+    return sent
+
+
+@shared_task
+def cut_access_for_overdue_payments_task():
+    """7+ gün gecikmiş ödemesi olan kullanıcıların aboneliğini 'past_due' yapar
+    (admin_override hariç). Erişim is_access_allowed üzerinden kapanır."""
+    from datetime import timedelta
+    from django.utils import timezone
+    from core.models import Payment, UserSubscription
+
+    cutoff = timezone.now() - timedelta(days=7)
+    overdue_users = Payment.objects.filter(
+        status="overdue", due_date__lt=cutoff,
+    ).values_list("user_id", flat=True).distinct()
+    affected = (
+        UserSubscription.objects
+        .filter(user_id__in=list(overdue_users), admin_override=False)
+        .exclude(status__in=("cancelled", "expired", "suspended", "passive"))
+        .update(status="past_due")
+    )
+    logger.info(f"[Beat] payment-overdue access cut: {affected}")
+    return affected

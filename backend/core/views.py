@@ -699,7 +699,7 @@ class ProductListView(APIView):
             profile.organization = org
             profile.save()
 
-        from core.models import Product
+        from core.models import Product, OrderItem
         from django.db.models import Q
         from rest_framework.pagination import PageNumberPagination
         from django.utils import timezone
@@ -709,6 +709,71 @@ class ProductListView(APIView):
         
         from django.db.models import Max
         
+        scope = request.GET.get("scope", "").strip().lower()
+        search = request.GET.get('search', '').strip()
+
+        paginator = PageNumberPagination()
+        paginator.page_size = 50
+        paginator.page_size_query_param = 'page_size'
+        paginator.max_page_size = 100
+
+        if scope == "actionable":
+            recent_variant_barcodes = OrderItem.objects.filter(
+                order__organization=org,
+                order__order_date__gte=two_months_ago,
+                product_variant__isnull=False,
+            ).exclude(
+                product_variant__barcode=""
+            ).values_list("product_variant__barcode", flat=True)
+
+            recent_skus = OrderItem.objects.filter(
+                order__organization=org,
+                order__order_date__gte=two_months_ago,
+            ).exclude(
+                sku=""
+            ).values_list("sku", flat=True)
+
+            products_qs = Product.objects.filter(
+                organization=org,
+                is_active=True,
+            ).filter(
+                Q(current_stock__gt=0) |
+                Q(variants__stock__gt=0) |
+                Q(barcode__in=recent_variant_barcodes) |
+                Q(variants__barcode__in=recent_variant_barcodes) |
+                Q(barcode__in=recent_skus) |
+                Q(variants__barcode__in=recent_skus) |
+                Q(marketplace_sku__in=recent_skus) |
+                Q(variants__marketplace_sku__in=recent_skus)
+            ).distinct()
+
+            if search:
+                products_qs = products_qs.filter(
+                    Q(title__icontains=search) |
+                    Q(barcode__icontains=search) |
+                    Q(marketplace_sku__icontains=search) |
+                    Q(variants__barcode__icontains=search) |
+                    Q(variants__title__icontains=search)
+                ).distinct()
+
+            skus_qs = products_qs.values("marketplace_sku").annotate(
+                latest_created_at=Max("trendyol_created_at")
+            ).order_by("-latest_created_at")
+
+            paginated_skus = paginator.paginate_queryset(skus_qs, request)
+            current_skus = [item["marketplace_sku"] for item in paginated_skus]
+
+            products = Product.objects.filter(
+                organization=org,
+                marketplace_sku__in=current_skus,
+                is_active=True,
+            ).prefetch_related("variants").order_by(
+                django_models.F("trendyol_created_at").desc(nulls_last=True),
+                "-id",
+            )
+            data = [self._serialize_product(p) for p in products]
+            return paginator.get_paginated_response(data)
+
         # Paginate by unique marketplace_skus (Model Codes)
         skus_qs = Product.objects.filter(
             organization=org,
@@ -717,7 +782,6 @@ class ProductListView(APIView):
             latest_created_at=Max('trendyol_created_at')
         ).order_by('-latest_created_at')
 
-        search = request.GET.get('search', '').strip()
         if search:
             skus_qs = skus_qs.filter(
                 Q(title__icontains=search) |
@@ -726,11 +790,6 @@ class ProductListView(APIView):
                 Q(variants__barcode__icontains=search) |
                 Q(variants__title__icontains=search)
             ).distinct()
-            
-        paginator = PageNumberPagination()
-        paginator.page_size = 50
-        paginator.page_size_query_param = 'page_size'
-        paginator.max_page_size = 100
         
         paginated_skus = paginator.paginate_queryset(skus_qs, request)
         current_skus = [item['marketplace_sku'] for item in paginated_skus]
@@ -786,6 +845,44 @@ class ProductListView(APIView):
 
         # Total count should be count of distinct SKUs
         return paginator.get_paginated_response(data)
+
+    @staticmethod
+    def _serialize_product(p):
+        return {
+            "id": p.id,
+            "title": p.title,
+            "barcode": p.barcode,
+            "marketplace_sku": p.marketplace_sku,
+            "trendyol_content_id": p.trendyol_content_id,
+            "currency": p.currency,
+            "sale_price": str(p.sale_price),
+            "vat_rate": str(p.vat_rate),
+            "commission_rate": str(p.commission_rate),
+            "image_url": p.image_url,
+            "desi": str(p.desi),
+            "default_carrier": p.default_carrier,
+            "brand": p.brand,
+            "return_rate": str(p.return_rate),
+            "fast_delivery": p.fast_delivery,
+            "current_stock": p.current_stock,
+            "is_active": p.is_active,
+            "variants": [
+                {
+                    "id": v.id,
+                    "title": v.title,
+                    "barcode": v.barcode,
+                    "marketplace_sku": v.marketplace_sku,
+                    "cost_price": str(v.cost_price),
+                    "cost_vat_rate": str(v.cost_vat_rate),
+                    "desi": str(v.desi) if v.desi is not None else None,
+                    "color": v.color,
+                    "size": v.size,
+                    "stock": v.stock,
+                    "extra_cost_rate": str(v.extra_cost_rate),
+                    "extra_cost_amount": str(v.extra_cost_amount),
+                } for v in p.variants.all()
+            ]
+        }
 
     def patch(self, request):
         """

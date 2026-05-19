@@ -31,7 +31,12 @@ export default function ProductSettingsPage() {
   const fetchProducts = async (currentPage = page, search = searchTerm) => {
     try {
       setIsLoading(true);
-      const res: any = await api.get(`/products/?page=${currentPage}&search=${search}`);
+      const params = new URLSearchParams({
+        page: String(currentPage),
+        search,
+        scope: "actionable",
+      });
+      const res: any = await api.get(`/products/?${params.toString()}`);
       const resData = res?.data || res;
       if (resData && resData.results) {
         setProducts(resData.results);

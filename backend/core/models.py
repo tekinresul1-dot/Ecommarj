@@ -77,6 +77,18 @@ class UserProfile(TimestampedModel):
         help_text="Dolu ise giriş/kayıt OTP olarak bu sabit kod kullanılır. Boşsa rastgele kod gönderilir."
     )
 
+    # --- Yönetici paneli alanları (additive — mevcut akış bozulmaz) ---
+    is_suspended = models.BooleanField("Askıya Alındı", default=False)
+    suspension_reason = models.TextField("Askıya Alma Nedeni", blank=True, default="")
+    admin_note = models.TextField("Admin Notu", blank=True, default="")
+    is_priority = models.BooleanField("Öncelikli", default=False)
+    is_risky = models.BooleanField("Riskli", default=False)
+    admin_override = models.BooleanField("Admin Override (Erişim)", default=False)
+    last_login_ip = models.GenericIPAddressField("Son Giriş IP", null=True, blank=True)
+    email_verified = models.BooleanField("E-posta Doğrulandı", default=False)
+    google_connected = models.BooleanField("Google Bağlı", default=False)
+    trendyol_store_count = models.IntegerField("Trendyol Mağaza Sayısı", default=0)
+
     class Meta:
         verbose_name = "Kullanıcı Profili"
         verbose_name_plural = "Kullanıcı Profilleri"
@@ -708,6 +720,14 @@ class CargoPrice(models.Model):
 # ---------------------------------------------------------------------------
 
 class SubscriptionPlan(models.Model):
+    PLAN_TYPES = [
+        ("free_trial", "Free Trial"),
+        ("monthly", "Aylık"),
+        ("yearly", "Yıllık"),
+        ("lifetime", "Ömür Boyu"),
+        ("manual", "Manuel"),
+    ]
+
     name = models.CharField("Plan Adı", max_length=100)
     price = models.DecimalField("Fiyat", max_digits=10, decimal_places=2)
     interval = models.CharField("Periyot", max_length=20, default="monthly")
@@ -716,6 +736,11 @@ class SubscriptionPlan(models.Model):
     store_limit = models.IntegerField("Mağaza Limiti", default=1)
     plan_tier = models.CharField("Plan Kademesi", max_length=50, default="starter")  # starter/business/enterprise
     yearly_total = models.DecimalField("Yıllık Toplam Tutar", max_digits=10, decimal_places=2, null=True, blank=True)
+
+    # --- Yönetici paneli alanları ---
+    plan_type = models.CharField("Plan Tipi", max_length=20, choices=PLAN_TYPES, default="monthly")
+    duration_days = models.IntegerField("Süre (gün)", null=True, blank=True)
+    features = models.JSONField("Özellikler", default=dict, blank=True)
 
     class Meta:
         verbose_name = "Abonelik Planı"
@@ -726,13 +751,21 @@ class SubscriptionPlan(models.Model):
 
 
 class UserSubscription(models.Model):
+    # NOT: Mevcut değerler (trialing/past_due/admin_override) KORUNDU; yeni
+    # yönetici-paneli değerleri eklendi (UNION). is_access_allowed() her ikisini
+    # de doğru yorumlar — eski satırlar ve PayTR akışı bozulmaz.
     STATUS_CHOICES = [
         ("active", "Aktif"),
+        ("passive", "Pasif"),
+        ("trial", "Deneme"),
+        ("trialing", "Deneme (eski)"),
         ("cancelled", "İptal"),
+        ("expired", "Süresi Doldu"),
+        ("suspended", "Askıya Alındı"),
         ("past_due", "Gecikmiş"),
-        ("trialing", "Deneme"),
         ("admin_override", "Admin Kontrolü"),
     ]
+    ACCESS_STATUSES = ("active", "trial", "trialing", "admin_override")
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
@@ -751,10 +784,23 @@ class UserSubscription(models.Model):
     )
     admin_override = models.BooleanField("Admin Erişimi", default=False)
     admin_override_reason = models.TextField("Admin Notu", blank=True)
-    trial_end = models.DateTimeField("Deneme Bitiş", null=True, blank=True)
+    trial_end = models.DateTimeField("Deneme Bitiş (eski)", null=True, blank=True)
     current_period_end = models.DateTimeField("Dönem Bitiş", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # --- Yönetici paneli alanları ---
+    start_date = models.DateTimeField("Başlangıç", null=True, blank=True)
+    end_date = models.DateTimeField("Bitiş", null=True, blank=True)
+    trial_end_date = models.DateTimeField("Deneme Bitiş Tarihi", null=True, blank=True)
+    created_by_admin = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_subscriptions",
+    )
+    notes = models.TextField("Notlar", blank=True, default="")
 
     class Meta:
         verbose_name = "Kullanıcı Aboneliği"
@@ -764,9 +810,14 @@ class UserSubscription(models.Model):
         return f"{self.user.email} — {self.status}"
 
     def is_access_allowed(self):
-        if self.admin_override:
+        # admin_override veya status alanı admin_override değerine sahipse direkt erişim
+        if self.admin_override or self.status == "admin_override":
             return True
-        return self.status in ("active", "trialing", "admin_override")
+        # Açıkça erişim engelleyen durumlar (önce kontrol)
+        if self.status in ("passive", "suspended", "cancelled", "expired", "past_due"):
+            return False
+        # Aktif/deneme erişimi (hem eski 'trialing' hem yeni 'trial' kabul)
+        return self.status in self.ACCESS_STATUSES
 
 
 # ---------------------------------------------------------------------------
@@ -774,12 +825,19 @@ class UserSubscription(models.Model):
 # ---------------------------------------------------------------------------
 
 class Payment(models.Model):
+    # PayTR akışı "success" değerini set ediyor; yönetici paneli "paid" terimini
+    # kullanıyor — her ikisi de geçerli (UNION). PAID_STATUSES sayım/raporlama
+    # için tek doğruluk kaynağıdır.
     STATUS_CHOICES = [
         ("pending", "Bekliyor"),
-        ("success", "Başarılı"),
+        ("paid", "Ödendi"),
+        ("success", "Başarılı (PayTR)"),
         ("failed", "Başarısız"),
         ("refunded", "İade Edildi"),
+        ("overdue", "Gecikmiş"),
     ]
+    PAID_STATUSES = ("paid", "success")
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="payments"
     )
@@ -792,11 +850,19 @@ class Payment(models.Model):
     amount = models.DecimalField("Tutar", max_digits=10, decimal_places=2)
     currency = models.CharField("Para Birimi", max_length=3, default="TRY")
     status = models.CharField("Durum", max_length=20, choices=STATUS_CHOICES, default="pending")
+    # Manuel admin ödemelerinde sahte unique değer kullanılır: MANUAL_<uuid>
     merchant_oid = models.CharField("Sipariş No (PayTR)", max_length=200, unique=True)
     paytr_token = models.CharField("PayTR Token", max_length=500, null=True, blank=True)
     paytr_response = models.JSONField("PayTR Yanıtı", null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # --- Yönetici paneli alanları ---
+    payment_date = models.DateTimeField("Ödeme Tarihi", null=True, blank=True)
+    due_date = models.DateTimeField("Vade Tarihi", null=True, blank=True)
+    paytr_transaction_id = models.CharField("PayTR Transaction ID", max_length=200, blank=True, default="")
+    invoice_note = models.TextField("Fatura Notu", blank=True, default="")
+    added_by_admin = models.BooleanField("Admin Tarafından Eklendi", default=False)
 
     class Meta:
         verbose_name = "Ödeme"
@@ -805,3 +871,163 @@ class Payment(models.Model):
 
     def __str__(self):
         return f"{self.user.email} — ₺{self.amount} ({self.status})"
+
+
+# ---------------------------------------------------------------------------
+# Access Codes — admin-issued login codes that bypass OTP
+# ---------------------------------------------------------------------------
+
+class AccessCode(models.Model):
+    """Yönetici tarafından üretilen, OTP yerine geçen giriş kodu."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="access_codes",
+    )
+    code = models.CharField("Kod", max_length=32, unique=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="issued_codes",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField("Son Geçerlilik", null=True, blank=True)
+    is_active = models.BooleanField("Aktif", default=True)
+    is_lifetime = models.BooleanField("Süresiz", default=False)
+    use_count = models.IntegerField("Kullanım Sayısı", default=0)
+    max_uses = models.IntegerField("Maks. Kullanım", null=True, blank=True)
+    last_used_at = models.DateTimeField("Son Kullanım", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Giriş Kodu"
+        verbose_name_plural = "Giriş Kodları"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "is_active"], name="ac_user_active_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.code[:4]}**** ({self.user.email})"
+
+    def is_usable(self) -> bool:
+        from django.utils import timezone
+        if not self.is_active:
+            return False
+        if not self.is_lifetime and self.expires_at and self.expires_at < timezone.now():
+            return False
+        if self.max_uses is not None and self.use_count >= self.max_uses:
+            return False
+        return True
+
+
+# ---------------------------------------------------------------------------
+# Brute-force koruma — login attempts & account lockout
+# ---------------------------------------------------------------------------
+
+class LoginAttempt(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="login_attempts",
+    )
+    ip_address = models.GenericIPAddressField()
+    attempted_at = models.DateTimeField(auto_now_add=True)
+    success = models.BooleanField(default=False)
+    attempt_type = models.CharField(max_length=20, default="password")
+
+    class Meta:
+        verbose_name = "Giriş Denemesi"
+        verbose_name_plural = "Giriş Denemeleri"
+        ordering = ["-attempted_at"]
+        indexes = [
+            models.Index(fields=["user", "attempted_at"], name="la_user_time_idx"),
+            models.Index(fields=["ip_address", "attempted_at"], name="la_ip_time_idx"),
+        ]
+
+
+class AccountLockout(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="lockouts",
+    )
+    locked_until = models.DateTimeField("Kilit Bitişi")
+    reason = models.CharField("Sebep", max_length=200)
+    failed_attempts = models.IntegerField("Başarısız Deneme Sayısı", default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Hesap Kilidi"
+        verbose_name_plural = "Hesap Kilitleri"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["user", "locked_until"], name="al_user_until_idx"),
+        ]
+
+    def is_active(self) -> bool:
+        from django.utils import timezone
+        return self.locked_until > timezone.now()
+
+
+# ---------------------------------------------------------------------------
+# Admin Audit Log
+# ---------------------------------------------------------------------------
+
+class AdminLog(models.Model):
+    ACTION_TYPES = [
+        ("user_activate", "Kullanıcı Aktifleştirme"),
+        ("user_deactivate", "Kullanıcı Pasifleştirme"),
+        ("user_suspend", "Kullanıcı Askıya Alma"),
+        ("user_unsuspend", "Askıdan Çıkarma"),
+        ("user_update", "Kullanıcı Güncelleme"),
+        ("plan_change", "Plan Değişikliği"),
+        ("subscription_create", "Abonelik Oluşturma"),
+        ("subscription_extend", "Abonelik Uzatma"),
+        ("subscription_cancel", "Abonelik İptal"),
+        ("subscription_trial", "Trial Başlat/Uzat"),
+        ("code_create", "Kod Oluşturma"),
+        ("code_delete", "Kod Silme"),
+        ("code_regenerate", "Kod Yenileme"),
+        ("payment_add", "Ödeme Ekleme"),
+        ("payment_edit", "Ödeme Düzenleme"),
+        ("override_set", "Manuel Override"),
+        ("note_add", "Not Ekleme"),
+    ]
+
+    admin = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name="admin_logs",
+    )
+    target_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="received_logs",
+    )
+    action_type = models.CharField(max_length=40, choices=ACTION_TYPES)
+    description = models.TextField()
+    old_value = models.JSONField(null=True, blank=True)
+    new_value = models.JSONField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Admin Logu"
+        verbose_name_plural = "Admin Logları"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["admin", "created_at"], name="al_admin_time_idx"),
+            models.Index(fields=["target_user", "created_at"], name="al_target_time_idx"),
+            models.Index(fields=["action_type", "created_at"], name="al_action_time_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.action_type} by {self.admin or 'system'} at {self.created_at:%Y-%m-%d %H:%M}"

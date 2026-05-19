@@ -54,6 +54,7 @@ interface Product {
 
 type SortKey = "title" | "current_stock" | "vat_rate" | "desi" | "return_rate" | "fast_delivery";
 type SortDir = "asc" | "desc";
+const PAGE_SIZE = 50;
 
 interface SortConfig {
     key: SortKey;
@@ -104,9 +105,17 @@ export default function ProductsPage() {
     const fetchProducts = async (currentPage = page, search = searchTerm) => {
         setIsLoading(true);
         try {
-            const res: any = await api.get(`/products/?page=${currentPage}&search=${search}`);
+            const params = new URLSearchParams({
+                page: String(currentPage),
+                page_size: String(PAGE_SIZE),
+                search,
+                scope: "actionable",
+            });
+            const res: any = await api.get(`/products/?${params.toString()}`);
             const resData = res?.data || res;
-            setProducts(resData.results || []);
+            const results = resData.results || [];
+            setProducts(results);
+            setExpandedRows({});
             setTotalCount(resData.count || 0);
         } catch (error) {
             console.error("Failed to load products:", error);
@@ -663,13 +672,13 @@ export default function ProductsPage() {
                 <div className="p-4 border-t border-slate-800 flex items-center justify-between bg-slate-900/50">
                     <div className="text-sm text-slate-400">
                         Toplam <span className="font-semibold text-slate-200">{totalCount}</span> üründen{" "}
-                        <span className="font-semibold text-slate-200">{totalCount > 0 ? (page - 1) * 50 + 1 : 0}–{Math.min(page * 50, totalCount)}</span> arası gösteriliyor.
+                        <span className="font-semibold text-slate-200">{totalCount > 0 ? (page - 1) * PAGE_SIZE + 1 : 0}–{Math.min(page * PAGE_SIZE, totalCount)}</span> arası gösteriliyor.
                     </div>
                     <div className="flex gap-2">
                         <Button variant="outline" size="sm" disabled={page === 1} onClick={() => setPage(page - 1)} className="border-slate-700 bg-slate-800 text-slate-300 hover:text-white">
                             Önceki
                         </Button>
-                        <Button variant="outline" size="sm" disabled={page * 50 >= totalCount} onClick={() => setPage(page + 1)} className="border-slate-700 bg-slate-800 text-slate-300 hover:text-white">
+                        <Button variant="outline" size="sm" disabled={page * PAGE_SIZE >= totalCount} onClick={() => setPage(page + 1)} className="border-slate-700 bg-slate-800 text-slate-300 hover:text-white">
                             Sonraki
                         </Button>
                     </div>

@@ -36,9 +36,11 @@ const nextConfig: NextConfig = {
     const publicApi = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api").replace(/\/$/, "");
     
     return [
-      // 1. Django Admin Paths (Must be first to take precedence)
-      { source: "/admin/:path*/", destination: `${internalBackend}/admin/:path*/` },
-      { source: "/admin/:path*", destination: `${internalBackend}/admin/:path*` },
+      // 1. Django Admin Paths (Yeni Next.js admin paneli /admin'i kullandığı
+      //    için Django admin'i /django-admin/'e taşıdık — backend URL'i de
+      //    eşleşmesi gerekiyor)
+      { source: "/django-admin/:path*/", destination: `${internalBackend}/django-admin/:path*/` },
+      { source: "/django-admin/:path*", destination: `${internalBackend}/django-admin/:path*` },
       
       // 2. Django Static Files (For admin CSS/JS)
       { source: "/static/:path*/", destination: `${internalBackend}/static/:path*/` },

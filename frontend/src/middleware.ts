@@ -17,6 +17,9 @@ const PROTECTED_PREFIXES = [
   "/pricing-rules",
   "/product-settings",
   "/promo-profit",
+  // Yönetici paneli — token şart; is_staff doğrulaması (admin) layout'unda
+  // /auth/me/ üzerinden yapılır.
+  "/admin",
 ];
 
 export function middleware(req: NextRequest) {
@@ -39,6 +42,7 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  // Run on every route except Next internals and API proxy.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/).*)"],
+  // Run on every route except Next internals, API proxy ve Django admin
+  // (Django session ile authentic edilir, JWT cookie kontrolü uygulanmamalı).
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/|django-admin/).*)"],
 };

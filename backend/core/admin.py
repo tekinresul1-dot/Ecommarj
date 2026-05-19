@@ -15,6 +15,10 @@ from .models import (
     SubscriptionPlan,
     UserSubscription,
     Payment,
+    AccessCode,
+    LoginAttempt,
+    AccountLockout,
+    AdminLog,
 )
 
 User = get_user_model()
@@ -34,25 +38,87 @@ class UserProfileInline(admin.StackedInline):
     model = UserProfile
     can_delete = False
     verbose_name_plural = "Profil"
-    fields = ("organization", "phone", "company", "onboarding_status", "static_otp_code")
+    fields = (
+        "organization", "phone", "company", "onboarding_status", "static_otp_code",
+        "is_suspended", "suspension_reason", "admin_note", "is_priority", "is_risky",
+        "admin_override", "email_verified", "google_connected", "trendyol_store_count",
+        "last_login_ip",
+    )
+    readonly_fields = ("last_login_ip",)
 
 
 class UserSubscriptionInline(admin.StackedInline):
     model = UserSubscription
     can_delete = False
+    fk_name = "user"
     verbose_name_plural = "Abonelik"
-    fields = ("plan", "status", "admin_override", "admin_override_reason", "trial_end", "current_period_end")
+    fields = (
+        "plan", "status", "admin_override", "admin_override_reason",
+        "start_date", "end_date", "trial_end_date", "current_period_end", "notes",
+    )
     extra = 0
+
+
+class PaymentInline(admin.TabularInline):
+    model = Payment
+    fk_name = "user"
+    extra = 0
+    fields = ("amount", "status", "plan", "payment_date", "due_date", "added_by_admin", "merchant_oid")
+    readonly_fields = ("merchant_oid",)
+    show_change_link = True
+
+
+class AccessCodeInline(admin.TabularInline):
+    model = AccessCode
+    fk_name = "user"
+    extra = 0
+    fields = ("code", "is_active", "is_lifetime", "expires_at", "max_uses", "use_count", "last_used_at")
+    readonly_fields = ("code", "use_count", "last_used_at")
+    show_change_link = True
 
 
 @admin.register(User)
 class CustomUserAdmin(BaseUserAdmin):
-    inlines = (UserProfileInline, UserSubscriptionInline)
-    list_display = ("email", "is_active", "is_staff", "date_joined", "last_login", "has_marketplace", "static_otp_code_display")
+    inlines = (UserProfileInline, UserSubscriptionInline, PaymentInline, AccessCodeInline)
+    list_display = ("email", "full_name", "is_active", "is_staff", "subscription_status", "date_joined", "last_login", "has_marketplace")
     list_editable = ("is_active",)
-    list_filter = ("is_active", "is_staff", "date_joined")
-    search_fields = ("email", "first_name", "last_name")
+    list_filter = ("is_active", "is_staff", "date_joined", "profile__is_suspended")
+    search_fields = ("email", "first_name", "last_name", "profile__company")
     ordering = ("-date_joined",)
+    actions = ("admin_activate_users", "admin_deactivate_users", "admin_suspend_users")
+
+    def full_name(self, obj):
+        return f"{obj.first_name} {obj.last_name}".strip() or "—"
+    full_name.short_description = "Ad Soyad"
+
+    def subscription_status(self, obj):
+        try:
+            return obj.usersubscription.status
+        except Exception:
+            return "—"
+    subscription_status.short_description = "Abonelik"
+
+    # Custom actions ---------------------------------------------------------
+
+    def admin_activate_users(self, request, queryset):
+        count = queryset.update(is_active=True)
+        UserProfile.objects.filter(user__in=queryset).update(is_suspended=False, suspension_reason="")
+        self.message_user(request, f"{count} kullanıcı aktifleştirildi.")
+    admin_activate_users.short_description = "Seçilenleri AKTİFLEŞTİR"
+
+    def admin_deactivate_users(self, request, queryset):
+        count = queryset.update(is_active=False)
+        self.message_user(request, f"{count} kullanıcı pasifleştirildi.")
+    admin_deactivate_users.short_description = "Seçilenleri PASİFLEŞTİR"
+
+    def admin_suspend_users(self, request, queryset):
+        for user in queryset:
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+            profile.is_suspended = True
+            profile.suspension_reason = "Admin paneli toplu işlemi"
+            profile.save(update_fields=["is_suspended", "suspension_reason"])
+        self.message_user(request, f"{queryset.count()} kullanıcı askıya alındı.")
+    admin_suspend_users.short_description = "Seçilenleri ASKIYA AL"
 
     fieldsets = (
         ("Giriş Bilgileri", {"fields": ("email", "password")}),
@@ -246,3 +312,67 @@ class SyncAuditLogAdmin(admin.ModelAdmin):
     list_filter = ("sync_type", "sync_mode", "success")
     readonly_fields = ("error_message",)
     ordering = ("-started_at",)
+
+
+# ===========================================================================
+# YÖNETİCİ PANELİ — Access Code / Login Attempt / Lockout / Admin Log
+# ===========================================================================
+
+@admin.register(AccessCode)
+class AccessCodeAdmin(admin.ModelAdmin):
+    list_display = ("user", "code_masked", "is_active", "is_lifetime", "use_count", "expires_at", "last_used_at", "created_at")
+    list_filter = ("is_active", "is_lifetime")
+    search_fields = ("user__email", "code")
+    readonly_fields = ("code", "use_count", "last_used_at", "created_at")
+    actions = ("deactivate_codes",)
+
+    def code_masked(self, obj):
+        if obj.code and len(obj.code) > 4:
+            return obj.code[:2] + "*" * (len(obj.code) - 4) + obj.code[-2:]
+        return obj.code or "—"
+    code_masked.short_description = "Kod"
+
+    def deactivate_codes(self, request, queryset):
+        count = queryset.update(is_active=False)
+        self.message_user(request, f"{count} kod pasife alındı.")
+    deactivate_codes.short_description = "Seçili kodları PASİFE ALC"
+
+
+@admin.register(LoginAttempt)
+class LoginAttemptAdmin(admin.ModelAdmin):
+    list_display = ("user", "ip_address", "success", "attempt_type", "attempted_at")
+    list_filter = ("success", "attempt_type")
+    search_fields = ("user__email", "ip_address")
+    readonly_fields = ("user", "ip_address", "success", "attempt_type", "attempted_at")
+    ordering = ("-attempted_at",)
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(AccountLockout)
+class AccountLockoutAdmin(admin.ModelAdmin):
+    list_display = ("user", "locked_until", "reason", "failed_attempts", "created_at")
+    list_filter = ("created_at",)
+    search_fields = ("user__email", "reason")
+    readonly_fields = ("created_at",)
+    ordering = ("-created_at",)
+
+
+@admin.register(AdminLog)
+class AdminLogAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "admin", "target_user", "action_type", "short_desc", "ip_address")
+    list_filter = ("action_type", "created_at")
+    search_fields = ("admin__email", "target_user__email", "description")
+    readonly_fields = ("admin", "target_user", "action_type", "description", "old_value", "new_value", "created_at", "ip_address")
+    ordering = ("-created_at",)
+
+    def short_desc(self, obj):
+        return (obj.description or "")[:80]
+    short_desc.short_description = "Açıklama"
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

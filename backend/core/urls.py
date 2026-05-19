@@ -1,8 +1,8 @@
-from django.urls import path
+from django.urls import path, include
 from .auth_views import (
     RegisterView, RegisterVerifyView, RegisterResendOTPView,
     LoginView, MeView, LogoutView, SendOTPView, VerifyOTPView, UpdateOnboardingStatusView,
-    GoogleLoginView, GoogleOAuthCallbackView,
+    GoogleLoginView, GoogleOAuthCallbackView, AccessCodeLoginView,
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
@@ -27,6 +27,7 @@ urlpatterns = [
     path("auth/register/verify/", RegisterVerifyView.as_view(), name="auth-register-verify"),
     path("auth/register/resend-otp/", RegisterResendOTPView.as_view(), name="auth-register-resend"),
     path("auth/login/", LoginView.as_view(), name="auth-login"),
+    path("auth/access-code/", AccessCodeLoginView.as_view(), name="auth-access-code"),
     path("auth/google/", GoogleLoginView.as_view(), name="auth-google"),
     path("auth/google/callback/", GoogleOAuthCallbackView.as_view(), name="auth-google-callback"),
     path("auth/send-otp/", SendOTPView.as_view(), name="auth-send-otp"),
@@ -74,6 +75,9 @@ urlpatterns = [
     path("user/product-cost-status/", ProductCostStatusView.as_view(), name="product-cost-status"),
     path("reports/payouts/", PayoutsView.as_view(), name="payouts"),
     path("reports/<str:report_type>/", MockReportsView.as_view(), name="reports-mock"),
+    # Admin paneli (is_staff zorunlu — IsAdminUser tüm endpoint'lerde)
+    path("admin/", include("core.admin_urls")),
+
     # Payments & Subscription
     path("payments/initiate/", InitiatePaymentView.as_view(), name="payment-initiate"),
     path("payments/callback/", PayTRCallbackView.as_view(), name="payment-callback"),

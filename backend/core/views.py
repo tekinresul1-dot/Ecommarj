@@ -1,8 +1,12 @@
+import logging
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from core.permissions import IsSubscribed
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 from django.db import models as django_models
 from decimal import Decimal
 
@@ -2929,34 +2933,66 @@ class PayTRCallbackView(APIView):
         post_data = request.POST.dict()
 
         if not paytr.verify_callback(post_data):
+            logger.warning("[PayTR] Callback hash verification failed")
             return HttpResponse("PAYTR_ERROR")
 
         merchant_oid = post_data.get("merchant_oid", "")
         status = post_data.get("status", "")
+        total_amount = post_data.get("total_amount", "")
 
         try:
             payment = Payment.objects.select_related("plan", "user").get(merchant_oid=merchant_oid)
-            payment.paytr_response = post_data
-            if status == "success":
-                payment.status = "success"
-                payment.save()
-                # Aboneliği aktif et
-                from django.utils import timezone
-                from dateutil.relativedelta import relativedelta
-                sub, _ = UserSubscription.objects.get_or_create(user=payment.user)
-                sub.plan = payment.plan
-                sub.status = "active"
-                sub.admin_override = False
-                if payment.plan and payment.plan.interval == "yearly":
-                    sub.current_period_end = timezone.now() + relativedelta(years=1)
-                else:
-                    sub.current_period_end = timezone.now() + relativedelta(months=1)
-                sub.save()
-            else:
-                payment.status = "failed"
-                payment.save()
         except Payment.DoesNotExist:
-            pass
+            logger.warning("[PayTR] Callback for unknown merchant_oid=%s", merchant_oid)
+            # Acknowledge so PayTR stops retrying an unknown order
+            return HttpResponse("OK")
+
+        # Idempotency: a finalized payment must never be processed twice.
+        # Without this, replaying a captured success callback would keep
+        # extending the subscription indefinitely.
+        if payment.status in ("success", "failed", "refunded"):
+            logger.info(
+                "[PayTR] Duplicate callback ignored for %s (status=%s)",
+                merchant_oid, payment.status,
+            )
+            return HttpResponse("OK")
+
+        # Amount integrity: PayTR sends total_amount in kuruş; it must match
+        # the amount we recorded when the payment was initiated.
+        expected_kurus = int(round(float(payment.amount) * 100))
+        try:
+            received_kurus = int(float(total_amount))
+        except (TypeError, ValueError):
+            received_kurus = -1
+        if received_kurus != expected_kurus:
+            logger.error(
+                "[PayTR] Amount mismatch for %s: expected=%s received=%s",
+                merchant_oid, expected_kurus, received_kurus,
+            )
+            payment.status = "failed"
+            payment.paytr_response = post_data
+            payment.save(update_fields=["status", "paytr_response"])
+            return HttpResponse("OK")
+
+        payment.paytr_response = post_data
+        if status == "success":
+            payment.status = "success"
+            payment.save()
+            # Aboneliği aktif et
+            from django.utils import timezone
+            from dateutil.relativedelta import relativedelta
+            sub, _ = UserSubscription.objects.get_or_create(user=payment.user)
+            sub.plan = payment.plan
+            sub.status = "active"
+            sub.admin_override = False
+            if payment.plan and payment.plan.interval == "yearly":
+                sub.current_period_end = timezone.now() + relativedelta(years=1)
+            else:
+                sub.current_period_end = timezone.now() + relativedelta(months=1)
+            sub.save()
+        else:
+            payment.status = "failed"
+            payment.save()
 
         return HttpResponse("OK")
 

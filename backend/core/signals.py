@@ -3,7 +3,7 @@ Django signals for EcomMarj Core app.
 """
 import logging
 from datetime import timedelta
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from django.utils import timezone
 
@@ -69,3 +69,18 @@ def connect_signals():
                     _trigger_initial_sync(instance)
             except Exception:
                 pass
+
+    # Pricing/tarife referans tabloları değişince ProfitCalculator'ın
+    # süreç-ömrü cache'lerini sıfırla (aksi halde eski fiyatlar kalır).
+    from core.models import CargoPrice, CargoPricing, CarrierFlatRate
+    from core.services.profit_calculator import reset_pricing_caches
+
+    @receiver(post_save, sender=CargoPrice)
+    @receiver(post_delete, sender=CargoPrice)
+    @receiver(post_save, sender=CargoPricing)
+    @receiver(post_delete, sender=CargoPricing)
+    @receiver(post_save, sender=CarrierFlatRate)
+    @receiver(post_delete, sender=CarrierFlatRate)
+    def _invalidate_pricing_caches(sender, **kwargs):
+        reset_pricing_caches()
+        logger.info("[Signal] Pricing caches invalidated (%s)", sender.__name__)

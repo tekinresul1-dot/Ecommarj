@@ -66,6 +66,16 @@ npm run dev
 
 Platform varsayılan olarak `http://localhost:3000` adresinde çalışacaktır. API istekleri `http://localhost:8000` adresine yönlendirilecektir.
 
+### Google OAuth
+
+Google ile giriş için ortam değişkenlerinde `GOOGLE_CLIENT_ID` ve `GOOGLE_CLIENT_SECRET` tanımlanmalıdır. Frontend tarafında Google butonunun görünebilmesi için aynı istemci kimliği `NEXT_PUBLIC_GOOGLE_CLIENT_ID` olarak da verilebilir; boş bırakılırsa Next.js yapılandırması `GOOGLE_CLIENT_ID` değerini kullanır.
+
+Google Cloud Console'da Authorized redirect URI olarak şunu ekleyin:
+
+```text
+https://www.ecommarj.com/auth/google/callback
+```
+
 ---
 
 ## 🚀 Üretim (Production) Ortamına Kurulum (Hetzner vb.)

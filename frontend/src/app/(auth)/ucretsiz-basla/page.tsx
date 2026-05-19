@@ -75,7 +75,7 @@ export default function RegisterPage() {
 
         setIsLoading(true);
         try {
-            const data = await api.post("/auth/register/", {
+            await api.post("/auth/register/", {
                 full_name: form.name,
                 email: form.email,
                 password: form.password,
@@ -85,12 +85,13 @@ export default function RegisterPage() {
                 kvkk_terms_accepted: form.kvkk,
             });
 
-            localStorage.setItem("access_token", data.tokens.access);
-            localStorage.setItem("refresh_token", data.tokens.refresh);
-            localStorage.setItem("user", JSON.stringify(data.user));
-
-            showToast("Hesap oluşturuldu! Yönlendiriliyorsunuz...", "success");
-            setTimeout(() => router.push("/dashboard"), 1500);
+            // No token is issued at registration. The account stays inactive
+            // until the e-mail OTP is verified on the /dogrulama page.
+            showToast("Hesap oluşturuldu! E-posta doğrulama kodu gönderildi.", "success");
+            setTimeout(
+                () => router.push(`/dogrulama?email=${encodeURIComponent(form.email)}`),
+                1200,
+            );
         } catch (error: any) {
             const data = error.data;
             if (data && data.error_code) {

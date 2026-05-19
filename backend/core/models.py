@@ -240,6 +240,8 @@ class Order(TimestampedModel):
             models.Index(fields=["organization", "order_date"]),
             models.Index(fields=["organization", "last_modified_date"]),
             models.Index(fields=["organization", "status"]),
+            models.Index(fields=["organization", "order_number"], name="ord_org_ordernum_idx"),
+            models.Index(fields=["organization", "marketplace_order_id"], name="ord_org_mktid_idx"),
         ]
 
     def __str__(self):
@@ -265,6 +267,11 @@ class OrderItem(TimestampedModel):
     class Meta:
         verbose_name = "Sipariş Kalemi"
         verbose_name_plural = "Sipariş Kalemleri"
+        indexes = [
+            # Dashboard kâr hesaplamaları order_in + product_variant join'i yapar
+            models.Index(fields=["order", "product_variant"], name="oi_order_variant_idx"),
+            models.Index(fields=["sku"], name="oi_sku_idx"),
+        ]
 
     def __str__(self):
         return f"{self.sku} (x{self.quantity})"
@@ -304,6 +311,11 @@ class FinancialTransaction(TimestampedModel):
     class Meta:
         verbose_name = "Finansal İşlem"
         verbose_name_plural = "Finansal İşlemler"
+        indexes = [
+            models.Index(fields=["organization", "transaction_type"], name="ft_org_type_idx"),
+            models.Index(fields=["order_item_ref", "transaction_type"], name="ft_itemref_type_idx"),
+            models.Index(fields=["organization", "created_at"], name="ft_org_created_idx"),
+        ]
 
     def __str__(self):
         return f"{self.get_transaction_type_display()} - {self.amount} {self.currency}"

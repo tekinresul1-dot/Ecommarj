@@ -8,7 +8,11 @@ RUN npm install
 FROM node:20-alpine AS builder
 WORKDIR /app
 ARG NEXT_PUBLIC_GOOGLE_CLIENT_ID
+ARG GOOGLE_CLIENT_ID
+ARG GOOGLE_OAUTH_CLIENT_ID
 ENV NEXT_PUBLIC_GOOGLE_CLIENT_ID=$NEXT_PUBLIC_GOOGLE_CLIENT_ID
+ENV GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
+ENV GOOGLE_OAUTH_CLIENT_ID=$GOOGLE_OAUTH_CLIENT_ID
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # Set environment variables for build time if needed
@@ -23,6 +27,10 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
+
+# Run as a non-root user (Alpine BusyBox adduser syntax)
+RUN adduser -D appuser && chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 3000
 CMD ["npm", "start"]

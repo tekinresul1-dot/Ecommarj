@@ -36,3 +36,36 @@ npm-debug.log*
 # Misc
 .vercel
 .turbo
+
+# Secrets / credential-bearing operational scripts (NEVER commit)
+*.exp
+ssh_deploy.py
+run_on_server.py
+final_fix_nginx_production.py
+fix_nginx*.py
+fix_django*.py
+fix_entrypoint.py
+patch_*.py
+clean_nginx.py
+dedupe_nginx.py
+restore_django.py
+rename_backend.py
+update_files_host.py
+test_nginx_rewrite.py
+
+# Backend ad-hoc debug/seed scripts (not real tests; tests live in core/tests/)
+backend/test_*.py
+backend/inspect_*.py
+backend/trace_*.py
+backend/force_sync_*.py
+backend/trigger_sync.py
+backend/fetch_api.py
+backend/check_dupes.py
+backend/cleanup_db*.py
+backend/seed*.py
+backend/celerybeat-schedule
+backend/server_logs.txt
+backend/.env
+backend/.env.*
+!backend/.env.example
+!backend/.env.staging.example

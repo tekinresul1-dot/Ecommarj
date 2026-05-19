@@ -1,3 +1,5 @@
+import { setSession, clearSession, getRefreshToken } from "./session";
+
 const getApiBase = () => {
     if (typeof window !== "undefined") {
         // In production, Nginx proxies /api to port 8000.
@@ -32,52 +34,43 @@ const getHeaders = (endpoint?: string): Record<string, string> => {
     };
 };
 
-/** Token yenilemeyi dener. Başarılıysa yeni access_token kaydeder ve true döner. */
-let _isRefreshing = false;
-let _refreshSubscribers: Array<(token: string | null) => void> = [];
+/**
+ * Token yenileme — tek-uçuş (single-flight) mutex.
+ * Eşzamanlı 401'ler aynı in-flight Promise'i paylaşır; böylece tek bir
+ * refresh isteği atılır ve eski subscriber-array race condition'ı ortadan
+ * kalkar.
+ */
+let _refreshPromise: Promise<string | null> | null = null;
 
 async function tryRefreshToken(): Promise<string | null> {
-    const refreshToken = localStorage.getItem("refresh_token");
+    const refreshToken = getRefreshToken();
     if (!refreshToken) return null;
 
-    if (_isRefreshing) {
-        // Başka bir istek zaten yenileme yapıyor, bekle
-        return new Promise((resolve) => {
-            _refreshSubscribers.push(resolve);
-        });
-    }
+    // Devam eden bir yenileme varsa onu bekle (yeni istek atma).
+    if (_refreshPromise) return _refreshPromise;
 
-    _isRefreshing = true;
-    try {
-        const res = await fetch(`${API_BASE}/auth/token/refresh/`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ refresh: refreshToken }),
-        });
+    _refreshPromise = (async () => {
+        try {
+            const res = await fetch(`${API_BASE}/auth/token/refresh/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ refresh: refreshToken }),
+            });
+            if (!res.ok) return null;
 
-        if (!res.ok) {
-            // Refresh token da geçersiz — tamamen oturumu kapat
-            _refreshSubscribers.forEach((cb) => cb(null));
-            _refreshSubscribers = [];
+            const data = await res.json();
+            const newAccess: string = data.access;
+            // localStorage + guard cookie senkron kalsın.
+            setSession(newAccess, data.refresh ?? undefined);
+            return newAccess;
+        } catch {
             return null;
+        } finally {
+            _refreshPromise = null;
         }
+    })();
 
-        const data = await res.json();
-        const newAccess: string = data.access;
-        localStorage.setItem("access_token", newAccess);
-        if (data.refresh) {
-            localStorage.setItem("refresh_token", data.refresh);
-        }
-        _refreshSubscribers.forEach((cb) => cb(newAccess));
-        _refreshSubscribers = [];
-        return newAccess;
-    } catch {
-        _refreshSubscribers.forEach((cb) => cb(null));
-        _refreshSubscribers = [];
-        return null;
-    } finally {
-        _isRefreshing = false;
-    }
+    return _refreshPromise;
 }
 
 function handleSubscriptionRequired(): void {
@@ -87,9 +80,8 @@ function handleSubscriptionRequired(): void {
 }
 
 function handleSessionExpired(): void {
-    localStorage.removeItem("access_token");
-    localStorage.removeItem("refresh_token");
-                if (typeof window !== "undefined" && window.location.pathname !== "/giris") {
+    clearSession();
+    if (typeof window !== "undefined" && window.location.pathname !== "/giris") {
         if (!window.location.search.includes("session_expired")) {
             window.location.href = "/giris?session_expired=true";
         }
@@ -256,6 +248,86 @@ export const api = {
                 throw new Error(`${res.status} ${res.statusText}: ${errorText.substring(0, 150)}...`);
             }
             throw new Error(parseErrorMsg(errorData, res.statusText, res.status));
+        }
+
+        const text = await res.text();
+        return text ? JSON.parse(text) : {};
+    },
+
+    put: async (endpoint: string, data: unknown) => {
+        const cleanEndpoint = cleanPath(endpoint);
+
+        let res = await fetch(`${API_BASE}${cleanEndpoint}`, {
+            method: "PUT",
+            headers: getHeaders(cleanEndpoint),
+            body: JSON.stringify(data),
+        });
+
+        if (res.status === 401 && !cleanEndpoint.includes("/auth/")) {
+            const newToken = await tryRefreshToken();
+            if (newToken) {
+                res = await fetch(`${API_BASE}${cleanEndpoint}`, {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${newToken}` },
+                    body: JSON.stringify(data),
+                });
+            } else {
+                handleSessionExpired();
+                throw new Error("Oturum süresi doldu. Lütfen tekrar giriş yapın.");
+            }
+        }
+
+        if (res.status === 403) {
+            handleSubscriptionRequired();
+            throw new Error("Bu özelliğe erişmek için aktif bir abonelik gereklidir.");
+        }
+
+        if (!res.ok) {
+            let errorData = null;
+            let errorText = "";
+            try {
+                errorText = await res.text();
+                errorData = JSON.parse(errorText);
+            } catch {
+                throw new Error(`${res.status} ${res.statusText}: ${errorText.substring(0, 150)}...`);
+            }
+            throw new Error(parseErrorMsg(errorData, res.statusText, res.status));
+        }
+
+        const text = await res.text();
+        return text ? JSON.parse(text) : {};
+    },
+
+    delete: async (endpoint: string) => {
+        const cleanEndpoint = cleanPath(endpoint);
+
+        let res = await fetch(`${API_BASE}${cleanEndpoint}`, {
+            method: "DELETE",
+            headers: getHeaders(cleanEndpoint),
+        });
+
+        if (res.status === 401 && !cleanEndpoint.includes("/auth/")) {
+            const newToken = await tryRefreshToken();
+            if (newToken) {
+                res = await fetch(`${API_BASE}${cleanEndpoint}`, {
+                    method: "DELETE",
+                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${newToken}` },
+                });
+            } else {
+                handleSessionExpired();
+                throw new Error("Oturum süresi doldu. Lütfen tekrar giriş yapın.");
+            }
+        }
+
+        if (res.status === 403) {
+            handleSubscriptionRequired();
+            throw new Error("Bu özelliğe erişmek için aktif bir abonelik gereklidir.");
+        }
+
+        if (!res.ok) {
+            const text = await res.text();
+            console.error(`API Error on DELETE ${endpoint} (${res.status}): ${text.substring(0, 150)}`);
+            throw new Error(`API Hatası (${res.status}): ${res.statusText}`);
         }
 
         const text = await res.text();

@@ -24,15 +24,14 @@ def custom_exception_handler(exc, context):
     # Unhandled exception — log it and return a clean JSON 500
     view = context.get("view", None)
     view_name = view.__class__.__name__ if view else "unknown"
-    logger.exception(
-        f"[500] Unhandled exception in {view_name}: {exc}",
+    logger.error(
+        "[500] Unhandled exception in %s: %s", view_name, exc,
         exc_info=exc,
     )
 
+    # Never leak internal exception details (DB errors, paths, stack
+    # fragments) to the client — they are only written to the server log.
     return Response(
-        {
-            "error": "Sunucu hatası oluştu. Lütfen daha sonra tekrar deneyin.",
-            "detail": str(exc),
-        },
+        {"error": "Sunucu hatası oluştu. Lütfen daha sonra tekrar deneyin."},
         status=status.HTTP_500_INTERNAL_SERVER_ERROR,
     )

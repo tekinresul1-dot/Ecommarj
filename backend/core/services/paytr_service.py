@@ -89,4 +89,5 @@ class PayTRService:
             ).digest()
         ).decode()
 
-        return expected_hash == post_data.get("hash", "")
+        # Constant-time comparison to avoid hash timing oracle
+        return hmac.compare_digest(expected_hash, post_data.get("hash", ""))

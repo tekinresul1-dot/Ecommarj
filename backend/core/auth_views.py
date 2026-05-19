@@ -19,6 +19,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
 from core.models import Organization, UserProfile
+from core.throttles import LoginRateThrottle, OTPRateThrottle
 from .auth_serializers import RegisterSerializer, LoginSerializer, GoogleLoginSerializer, UserSerializer
 
 
@@ -65,6 +66,7 @@ class RegisterView(APIView):
     """POST /api/auth/register/ — yeni hesap oluştur."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [OTPRateThrottle]
 
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
@@ -99,13 +101,42 @@ class RegisterView(APIView):
             )
 
         user = serializer.save()
-        tokens = _get_tokens_for_user(user)
+
+        # No token is issued here. The account is inactive until the user
+        # proves ownership of the e-mail via the OTP sent below
+        # (verified at POST /api/auth/register/verify/).
+        email = user.email.lower()
+        otp_code = f"{secrets.randbelow(900000) + 100000}"
+        try:
+            cache.set(f"otp_reg_{email}", otp_code, timeout=600)
+            cache.set(f"otp_resend_cooldown_{email}", True, timeout=60)
+        except Exception:
+            logger.exception("[Register] OTP cache yazılamadı (%s)", email)
+            return Response(
+                {"error": "Sistem geçici olarak kullanılamıyor. Lütfen tekrar deneyin."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        subject = "EcomMarj Hesap Doğrulama Kodu"
+        message = (
+            f"Hesabınızı doğrulamak için kodunuz: {otp_code}\n\n"
+            "Bu kod 10 dakika boyunca geçerlidir."
+        )
+        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "info@ecommarj.com")
+        try:
+            send_mail(subject, message, from_email, [email], fail_silently=False)
+        except Exception:
+            logger.exception("[Register] Doğrulama e-postası gönderilemedi (%s)", email)
+            return Response(
+                {"error": "Doğrulama e-postası gönderilemedi. Lütfen tekrar deneyin."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         return Response(
             {
-                "message": "Hesap oluşturuldu.",
-                "user": UserSerializer(user).data,
-                "tokens": tokens,
+                "message": "Hesap oluşturuldu. E-posta adresinize gönderilen doğrulama kodunu giriniz.",
+                "email": email,
+                "next_action": "verify",
             },
             status=status.HTTP_201_CREATED,
         )
@@ -114,6 +145,7 @@ class RegisterView(APIView):
 class RegisterVerifyView(APIView):
     """POST /api/auth/register/verify/ — yeni kaydı doğrula ve login ol."""
     permission_classes = [AllowAny]
+    throttle_classes = [OTPRateThrottle]
 
     def post(self, request):
         email = request.data.get("email")
@@ -168,6 +200,7 @@ class RegisterVerifyView(APIView):
 class RegisterResendOTPView(APIView):
     """POST /api/auth/register/resend-otp/ — doğrulama kodunu tekrar gönder."""
     permission_classes = [AllowAny]
+    throttle_classes = [OTPRateThrottle]
 
     def post(self, request):
         email = request.data.get("email")
@@ -203,6 +236,7 @@ class LoginView(APIView):
     """POST /api/auth/login/ — giriş yap."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -245,6 +279,7 @@ class GoogleLoginView(APIView):
     """POST /api/auth/google/ — Google ile giriş yap."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         serializer = GoogleLoginSerializer(data=request.data)
@@ -338,6 +373,27 @@ class GoogleLoginView(APIView):
         )
 
 
+class GoogleOAuthCallbackView(GoogleLoginView):
+    """GET/POST /api/auth/google/callback/ — Google OAuth callback endpoint'i."""
+
+    def get(self, request):
+        error = request.query_params.get("error")
+        if error:
+            return Response(
+                {"error": "Google giriş işlemi tamamlanamadı.", "detail": error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {
+                "message": "Google OAuth callback route çalışıyor.",
+                "login_endpoint": "/api/auth/google/",
+                "redirect_uri": "https://www.ecommarj.com/auth/google/callback",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
 class MeView(APIView):
     """GET /api/auth/me/ — mevcut kullanıcı bilgisi."""
 
@@ -347,40 +403,82 @@ class MeView(APIView):
         return Response(UserSerializer(request.user).data)
 
 
+class LogoutView(APIView):
+    """POST /api/auth/logout/ — refresh token'ı blacklist'e alarak oturumu kapat."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from rest_framework_simplejwt.exceptions import TokenError
+
+        refresh = request.data.get("refresh")
+        if not refresh:
+            return Response(
+                {"error": "refresh token gereklidir."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            RefreshToken(refresh).blacklist()
+        except TokenError:
+            # Already expired/blacklisted/invalid — desired end state reached.
+            pass
+        return Response({"message": "Çıkış yapıldı."}, status=status.HTTP_200_OK)
+
+
 class SendOTPView(APIView):
     """POST /api/auth/send-otp/ — giriş için e-postaya kod gönder."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [OTPRateThrottle]
+
+    # Account-existence is never revealed: the response is identical whether
+    # or not the e-mail is registered (prevents user enumeration).
+    GENERIC_OK = {"message": "Eğer bu e-posta kayıtlıysa bir doğrulama kodu gönderildi."}
 
     def post(self, request):
         email = request.data.get("email")
         if not email:
             return Response({"error": "E-posta gereklidir."}, status=status.HTTP_400_BAD_REQUEST)
 
-        email = email.lower()
+        email = email.lower().strip()
 
-        if not User.objects.filter(email=email, is_active=True).exists():
-            return Response(
-                {"error": "Bu e-posta adresi sistemde kayıtlı değil."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        # Kullanıcıya sabit OTP kodu atanmışsa onu kullan
+        # 60s cooldown — keyed regardless of account existence so timing
+        # cannot be used to enumerate accounts.
+        cooldown_key = f"otp_send_cooldown_{email}"
         try:
-            from core.models import UserProfile
-            profile = UserProfile.objects.get(user__email=email)
-            static_code = profile.static_otp_code
-        except UserProfile.DoesNotExist:
-            static_code = None
+            if cache.get(cooldown_key):
+                return Response(
+                    {"error": "Lütfen yeni bir kod istemeden önce 60 saniye bekleyin."},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+        except Exception:
+            pass  # non-critical, fall through
 
-        if static_code:
-            otp_code = static_code
-        else:
-            otp_code = f"{secrets.randbelow(900000) + 100000}"
+        user = User.objects.filter(email=email, is_active=True).first()
+        if not user:
+            # Same response & cooldown as the success path — no enumeration.
+            try:
+                cache.set(cooldown_key, True, timeout=60)
+            except Exception:
+                pass
+            return Response(self.GENERIC_OK, status=status.HTTP_200_OK)
 
-        # OTP'yi cache'e yaz (Redis). Başarısız olursa 503 dön.
+        # static_otp_code is a fixed per-user login code — only honored in
+        # DEBUG. In production it is ignored so it can never act as a backdoor.
+        static_code = None
+        if settings.DEBUG:
+            try:
+                from core.models import UserProfile
+                profile = UserProfile.objects.get(user__email=email)
+                static_code = profile.static_otp_code
+            except UserProfile.DoesNotExist:
+                static_code = None
+
+        otp_code = static_code or f"{secrets.randbelow(900000) + 100000}"
+
         try:
             cache.set(f"otp_{email}", otp_code, timeout=300)
+            cache.set(cooldown_key, True, timeout=60)
         except Exception as e:
             logger.exception(f"[SendOTP] Redis/cache hatası ({email}): {e}")
             return Response(
@@ -388,7 +486,6 @@ class SendOTPView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        # E-posta gönderme
         subject = "EcomMarj Doğrulama Kodu"
         message = f"Giriş yapmak için doğrulama kodunuz: {otp_code}\n\nBu kod 5 dakika boyunca geçerlidir."
         from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "info@ecommarj.com")
@@ -398,24 +495,24 @@ class SendOTPView(APIView):
         except Exception as e:
             logger.exception(f"[SendOTP] SMTP e-posta gönderilemedi ({email}): {e}")
             return Response(
-                {"error": "E-posta gönderilemedi. Lütfen daha sonra tekrar deneyin."},
+                {"error": "Sistem geçici olarak kullanılamıyor. Lütfen tekrar deneyin."},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        # Reset retry count if resending code
         try:
-            cache.delete(f"otp_retry_{email}")
+            cache.delete(f"otp_login_retry_{email}")
         except Exception:
             pass  # non-critical
 
-        logger.info(f"[SendOTP] OTP başarıyla gönderildi: {email}")
-        return Response({"message": "Doğrulama kodu e-posta adresinize gönderildi."}, status=status.HTTP_200_OK)
+        logger.info(f"[SendOTP] OTP gönderildi: {email}")
+        return Response(self.GENERIC_OK, status=status.HTTP_200_OK)
 
 
 class VerifyOTPView(APIView):
     """POST /api/auth/verify-otp/ — kodu doğrula ve giriş yap."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [OTPRateThrottle]
 
     def post(self, request):
         import logging

@@ -124,8 +124,11 @@ class TrendyolSyncService:
                 try:
                     dt = datetime.fromtimestamp(create_ts / 1000.0, tz=dt_timezone.utc)
                     Product.objects.filter(pk=product.pk).update(trendyol_created_at=dt)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "[Sync] trendyol_created_at güncellenemedi (pk=%s, ts=%s): %s",
+                        product.pk, create_ts, e,
+                    )
             
             stock_code = p_data.get("stockCode") or p_data.get("productCode") or ""
 
@@ -161,35 +164,43 @@ class TrendyolSyncService:
         window_size = 15  # gün
         step_size = 7     # gün (8 gün çakışma)
         
-        all_orders_data = []
-        
+        # Bellek koruması: 365 günü tek listede toplamak yerine her 15 günlük
+        # pencereyi çek → dedup → işle → belleği boşalt. seen_packages yalnızca
+        # paket-id string'lerini tutar (sipariş dict'lerinden çok daha küçük).
+        seen_packages = set()
+        total_processed = 0
+
         day = 0
         while day < total_days:
             window_start = now - timedelta(days=total_days - day)
             window_end = now - timedelta(days=max(0, total_days - day - window_size))
-            
+
             start_ms = int(window_start.timestamp() * 1000)
             end_ms = int(window_end.timestamp() * 1000)
-            
+
             chunk_orders = self.adapter.fetch_orders(
                 start_date_ms=start_ms,
-                end_date_ms=end_ms
+                end_date_ms=end_ms,
             )
-            all_orders_data.extend(chunk_orders)
-            
+
+            window_orders = []
+            for o_data in chunk_orders:
+                pkg_id = str(o_data.get("shipmentPackageId") or o_data.get("id") or "")
+                if pkg_id and pkg_id not in seen_packages:
+                    seen_packages.add(pkg_id)
+                    window_orders.append(o_data)
+
+            self._process_orders(window_orders)
+            total_processed += len(window_orders)
+
+            # Pencere belleğini serbest bırak
+            del chunk_orders, window_orders
+
             day += step_size
-        
-        # Tekrarlananları shipmentPackageId ile filtrele
-        seen_packages = set()
-        orders_data = []
-        for o_data in all_orders_data:
-            pkg_id = str(o_data.get("shipmentPackageId") or o_data.get("id") or "")
-            if pkg_id and pkg_id not in seen_packages:
-                seen_packages.add(pkg_id)
-                orders_data.append(o_data)
-        
-        logger.info(f"Total unique orders to process: {len(orders_data)}")
-        
+
+        logger.info(f"Orders sync complete. {total_processed} orders processed.")
+
+    def _process_orders(self, orders_data):
         for o_data in orders_data:
             order_number = o_data.get("orderNumber")
             # Trendyol her paketi ayrı bir kayıt olarak döner.
@@ -330,7 +341,7 @@ class TrendyolSyncService:
                 except Exception as e:
                     logger.warning(f"[SyncOrders] Kargo tutarı kaydedilemedi (order {order_number}): {e}")
 
-        logger.info(f"Orders sync complete. {len(orders_data)} orders processed.")
+        logger.debug(f"[SyncOrders] Pencere işlendi: {len(orders_data)} sipariş.")
 
     # ------------------------------------------------------------------
     # SELLER INVOICE SETTLEMENTS — Per-order gerçek kargo tutarları (CHE API)
@@ -426,8 +437,11 @@ class TrendyolSyncService:
                                 "raw_payload": record,
                             }
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(
+                        "[Sync] Komisyon FinancialTransaction yazılamadı "
+                        "(order_item=%s): %s", first_item, e, exc_info=True,
+                    )
 
             # Hizmet bedeli
             service_raw = record.get("serviceFee") or record.get("trendyolCut") or record.get("platformFee")
@@ -445,8 +459,11 @@ class TrendyolSyncService:
                                 "raw_payload": record,
                             }
                         )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error(
+                        "[Sync] Hizmet bedeli FinancialTransaction yazılamadı "
+                        "(order_item=%s): %s", first_item, e, exc_info=True,
+                    )
 
         logger.info(f"SellerInvoiceSettlement sync complete. {processed} cargo records processed from {len(records)} records.")
 

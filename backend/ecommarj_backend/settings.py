@@ -5,17 +5,37 @@ Django settings for ecommarj_backend project.
 import os
 from pathlib import Path
 from datetime import timedelta
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "insecure-dev-key-change-me")
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY") or os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY environment variable is not set. "
+        "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(64))\""
+    )
+
+# Symmetric encryption key for marketplace API credentials at rest.
+# MUST be a 32-byte url-safe base64 Fernet key, independent of SECRET_KEY so
+# that rotating the JWT signing key never makes stored credentials unreadable.
+# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+if not ENCRYPTION_KEY:
+    raise ImproperlyConfigured(
+        "ENCRYPTION_KEY environment variable is not set. "
+        "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+    )
 
 DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() in ("true", "1", "yes")
 
-ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+ALLOWED_HOSTS = (
+    os.getenv("DJANGO_ALLOWED_HOSTS")
+    or os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1")
+).split(",")
 
 APPEND_SLASH = True
 
@@ -216,10 +236,17 @@ DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "EcomMarj <info@ecommarj.co
 # Google OAuth
 # ---------------------------------------------------------------------------
 
-GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_ID = (
+    os.getenv("GOOGLE_CLIENT_ID")
+    or os.getenv("GOOGLE_OAUTH_CLIENT_ID")
+    or os.getenv("NEXT_PUBLIC_GOOGLE_CLIENT_ID")
+    or ""
+).strip()
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+GOOGLE_OAUTH_CLIENT_ID = GOOGLE_CLIENT_ID
 GOOGLE_OAUTH_CLIENT_IDS = [
     client_id.strip()
-    for client_id in os.getenv("GOOGLE_OAUTH_CLIENT_IDS", GOOGLE_OAUTH_CLIENT_ID).split(",")
+    for client_id in os.getenv("GOOGLE_OAUTH_CLIENT_IDS", GOOGLE_CLIENT_ID).split(",")
     if client_id.strip()
 ]
 
@@ -244,6 +271,16 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "20/minute",
+        "user": "100/minute",
+        "login": "5/minute",
+        "otp": "3/minute",
+    },
     "EXCEPTION_HANDLER": "ecommarj_backend.exception_handler.custom_exception_handler",
 }
 
@@ -269,12 +306,16 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 # ---------------------------------------------------------------------------
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(hours=8),   # 1h → 8h: refresh mekanizmasına köprü
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=30),  # 7d → 30d: "beni hatırla" deneyimi
+    "ACCESS_TOKEN_LIFETIME": timedelta(hours=8),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
+
+# Shared secret that Trendyol must send (X-Webhook-Secret header) so the
+# unauthenticated webhook endpoint cannot be abused as a task-trigger oracle.
+TRENDYOL_WEBHOOK_SECRET = os.getenv("TRENDYOL_WEBHOOK_SECRET", "")
 
 
 # Cache — OTP ve session için Redis (Celery ile aynı Redis instance)
@@ -364,4 +405,4 @@ if not DEBUG:
 PAYTR_MERCHANT_ID = os.getenv("PAYTR_MERCHANT_ID", "")
 PAYTR_MERCHANT_KEY = os.getenv("PAYTR_MERCHANT_KEY", "")
 PAYTR_MERCHANT_SALT = os.getenv("PAYTR_MERCHANT_SALT", "")
-PAYTR_TEST_MODE = os.getenv("PAYTR_TEST_MODE", "True").lower() in ("true", "1", "yes")
+PAYTR_TEST_MODE = os.getenv("PAYTR_TEST_MODE", "False").lower() in ("true", "1", "yes")

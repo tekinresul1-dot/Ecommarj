@@ -19,5 +19,6 @@ class IsSubscribed(BasePermission):
         try:
             return request.user.usersubscription.is_access_allowed()
         except Exception:
-            # Abonelik kaydı yoksa erişime izin ver (eski kullanıcılar için)
-            return True
+            # Fail-closed: no subscription record (or any lookup error) means
+            # the paywall is NOT satisfied.
+            return False

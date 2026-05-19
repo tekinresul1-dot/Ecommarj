@@ -65,21 +65,23 @@ class RegisterSerializer(serializers.Serializer):
         
         user = User.objects.filter(email=email).first()
         if user:
-            # Update existing user (e.g. previously unverified)
+            # Update existing (previously unverified) user — stays inactive
+            # until the e-mail OTP is verified.
             user.set_password(validated_data["password"])
             user.first_name = first_name
             user.last_name = last_name
-            user.is_active = True
+            user.is_active = False
             user.save()
         else:
-            # Create new user
+            # New user is created INACTIVE: a valid session is only issued
+            # after the e-mail ownership is proven via OTP verification.
             user = User.objects.create_user(
                 username=email,
                 email=email,
                 password=validated_data["password"],
                 first_name=first_name,
                 last_name=last_name,
-                is_active=True,
+                is_active=False,
             )
 
         # Handle Organization and Profile

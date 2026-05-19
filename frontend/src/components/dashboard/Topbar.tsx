@@ -5,6 +5,7 @@ import { User, Bell, Menu, LogOut, ExternalLink } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { clearSession } from "@/lib/session";
 
 export function Topbar({ setMobileNavOpen }: { setMobileNavOpen: (v: boolean) => void }) {
     const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -42,10 +43,19 @@ export function Topbar({ setMobileNavOpen }: { setMobileNavOpen: (v: boolean) =>
         fetchUser();
     }, []);
 
-    const handleLogout = () => {
-        localStorage.removeItem("access_token");
-        localStorage.removeItem("refresh_token");
-        router.push("/");
+    const handleLogout = async () => {
+        const refresh = localStorage.getItem("refresh_token");
+        try {
+            if (refresh) {
+                // Server-side blacklist so the refresh token cannot be reused.
+                await api.post("/auth/logout/", { refresh });
+            }
+        } catch {
+            // Even if the call fails, proceed to clear the local session.
+        } finally {
+            clearSession();
+            router.push("/");
+        }
     };
 
     return (
@@ -64,7 +74,7 @@ export function Topbar({ setMobileNavOpen }: { setMobileNavOpen: (v: boolean) =>
 
             <div className="flex flex-1 gap-x-4 self-stretch lg:gap-x-6 justify-end">
                 <div className="flex items-center gap-x-4 lg:gap-x-6">
-                    <Link href="https://trendyol.com" target="_blank" className="hidden sm:flex items-center gap-2 text-sm text-white/60 hover:text-white transition-colors">
+                    <Link href="https://trendyol.com" target="_blank" rel="noopener noreferrer" className="hidden sm:flex items-center gap-2 text-sm text-white/60 hover:text-white transition-colors">
                         Satıcı Paneli <ExternalLink className="h-4 w-4" />
                     </Link>
                     <button type="button" className="-m-2.5 p-2.5 text-white/60 hover:text-white relative">

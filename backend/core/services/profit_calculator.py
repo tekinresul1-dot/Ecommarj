@@ -1,6 +1,9 @@
+import logging
 from decimal import Decimal
 from typing import Dict, Any
 from core.models import OrderItem, FinancialTransactionType
+
+logger = logging.getLogger(__name__)
 
 # 26 Mart 2026 Kargo Barem Destek Tabloları (KDV Hariç)
 TRENDYOL_BAREM_RATES = {
@@ -105,6 +108,38 @@ def _get_cargo_pricing_cache() -> dict:
         except Exception:
             _CARGO_PRICING_CACHE = {}
     return _CARGO_PRICING_CACHE
+
+
+_CARGO_PRICE_BY_DESI_CACHE: dict | None = None
+
+def _get_cargo_price_by_desi() -> dict:
+    """
+    Aktif CargoPrice kayıtlarını desi → price olarak tek seferde önbellekler.
+    Önceden her sipariş kalemi için ayrı bir CargoPrice.objects.get() sorgusu
+    çalışıyordu (N+1). Referans tablosu olduğundan süreç ömrü boyunca cache'lenir.
+    """
+    global _CARGO_PRICE_BY_DESI_CACHE
+    if _CARGO_PRICE_BY_DESI_CACHE is None:
+        try:
+            from core.models import CargoPrice
+            _CARGO_PRICE_BY_DESI_CACHE = {
+                cp.desi: cp.price
+                for cp in CargoPrice.objects.filter(is_active=True)
+            }
+        except Exception:
+            _CARGO_PRICE_BY_DESI_CACHE = {}
+    return _CARGO_PRICE_BY_DESI_CACHE
+
+
+def reset_pricing_caches() -> None:
+    """
+    Fiyat/tarife referans tabloları güncellendiğinde (admin değişikliği,
+    seed) çağrılmalı — aksi halde süreç ömrü boyunca eski değerler kalır.
+    """
+    global _CARRIER_FLAT_RATE_CACHE, _CARGO_PRICING_CACHE, _CARGO_PRICE_BY_DESI_CACHE
+    _CARRIER_FLAT_RATE_CACHE = None
+    _CARGO_PRICING_CACHE = None
+    _CARGO_PRICE_BY_DESI_CACHE = None
 
 
 class ProfitCalculator:
@@ -246,22 +281,39 @@ class ProfitCalculator:
                 cargo_cost = abs(tx.amount)
                 
         # Komisyon: CHE Sale transaction'ından gerçek değeri kullan (varsa)
+        order_num = order_item.order.order_number or order_item.order.marketplace_order_id or ""
+        barcode = order_item.sku or ""
         try:
             from core.models import CheTransaction
-            order_num = order_item.order.order_number or order_item.order.marketplace_order_id or ""
-            barcode = order_item.sku or ""
-            che_sale = CheTransaction.objects.filter(
-                account=order_item.order.marketplace_account,
-                source=CheTransaction.SOURCE_SETTLEMENTS,
-                order_number=order_num,
-            )
+            order = order_item.order
+            # Per-order memo: önceden HER sipariş kalemi için ayrı bir
+            # CheTransaction sorgusu çalışıyordu (N+1). Bir siparişin tüm
+            # settlement kayıtlarını sipariş örneğine (request-scoped) bir kez
+            # yükleyip kalemler arasında paylaşıyoruz.
+            che_list = getattr(order, "_che_settlements_memo", None)
+            if che_list is None:
+                che_list = list(
+                    CheTransaction.objects.filter(
+                        account=order.marketplace_account,
+                        source=CheTransaction.SOURCE_SETTLEMENTS,
+                        order_number=order_num,
+                    )
+                )
+                order._che_settlements_memo = che_list
+
+            che_sale = None
             if barcode:
-                che_sale = che_sale.filter(barcode=barcode)
-            che_sale = che_sale.first()
+                che_sale = next((t for t in che_list if t.barcode == barcode), None)
+            elif che_list:
+                che_sale = che_list[0]
             if che_sale and che_sale.commission_rate and che_sale.commission_rate > Decimal("0"):
                 commission_rate = che_sale.commission_rate
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "[ProfitCalc] CheTransaction komisyon oranı okunamadı "
+                "(order=%s barcode=%s): %s — fallback orana düşülüyor",
+                order_num, barcode, e,
+            )
 
         # Komisyon ve KDV: sipariş satırındaki snapshot verileri öncelikli (fallback)
         if commission_rate == Decimal("0.00") and order_item.applied_commission_rate and order_item.applied_commission_rate > Decimal("0.00"):
@@ -326,13 +378,23 @@ class ProfitCalculator:
                     cargo_price_found = False
                     if active_desi is not None:
                         try:
-                            from core.models import CargoPrice
                             desi_int = int(active_desi)
-                            cp = CargoPrice.objects.get(desi=desi_int, is_active=True)
-                            cargo_cost = cp.price
-                            cargo_price_found = True
-                        except Exception:
-                            pass
+                            price = _get_cargo_price_by_desi().get(desi_int)
+                            if price is not None:
+                                cargo_cost = price
+                                cargo_price_found = True
+                            else:
+                                logger.warning(
+                                    "[ProfitCalc] CargoPrice yok (desi=%s) "
+                                    "— fallback kargo tarifesine düşülüyor",
+                                    active_desi,
+                                )
+                        except Exception as e:
+                            logger.warning(
+                                "[ProfitCalc] CargoPrice okunamadı (desi=%s): %s "
+                                "— fallback kargo tarifesine düşülüyor",
+                                active_desi, e,
+                            )
                     if not cargo_price_found:
                         pricing = _get_cargo_pricing_cache().get((carrier, active_desi))
                         if pricing:

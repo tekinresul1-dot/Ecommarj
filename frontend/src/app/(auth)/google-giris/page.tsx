@@ -5,8 +5,11 @@ import Link from "next/link";
 import Script from "next/script";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { setSession } from "@/lib/session";
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
+const GOOGLE_CONFIGURATION_ERROR =
+    "Google ile giriş şu anda kullanıma hazır değil. Lütfen daha sonra tekrar deneyin veya diğer giriş yöntemlerini kullanın.";
 
 type GoogleCredentialResponse = {
     credential?: string;
@@ -66,14 +69,14 @@ export default function GoogleLoginPage() {
     }, [router]);
 
     useEffect(() => {
-        const googleWindow = window as GoogleWindow;
-        const googleApi = googleWindow.google;
-        if (!scriptReady || !buttonRef.current || initializedRef.current || !googleApi?.accounts?.id) {
+        if (!GOOGLE_CLIENT_ID) {
+            setError(GOOGLE_CONFIGURATION_ERROR);
             return;
         }
 
-        if (!GOOGLE_CLIENT_ID) {
-            setError("Google giriş yapılandırması henüz tamamlanmamış.");
+        const googleWindow = window as GoogleWindow;
+        const googleApi = googleWindow.google;
+        if (!scriptReady || !buttonRef.current || initializedRef.current || !googleApi?.accounts?.id) {
             return;
         }
 
@@ -90,9 +93,7 @@ export default function GoogleLoginPage() {
 
                 try {
                     const data = await api.post("/auth/google/", { id_token: response.credential });
-                    localStorage.setItem("access_token", data.tokens.access);
-                    localStorage.setItem("refresh_token", data.tokens.refresh);
-                    localStorage.setItem("user", JSON.stringify(data.user));
+                    setSession(data.tokens.access, data.tokens.refresh, data.user);
                     showToast("Google ile giriş başarılı. Yönlendiriliyorsunuz...", "success");
                     setTimeout(() => router.push("/dashboard"), 1200);
                 } catch (err: unknown) {
@@ -108,6 +109,7 @@ export default function GoogleLoginPage() {
             cancel_on_tap_outside: true,
         });
 
+        buttonRef.current.innerHTML = "";
         googleApi.accounts.id.renderButton(buttonRef.current, {
             theme: "outline",
             size: "large",
@@ -122,11 +124,14 @@ export default function GoogleLoginPage() {
 
     return (
         <>
-            <Script
-                src="https://accounts.google.com/gsi/client"
-                strategy="afterInteractive"
-                onLoad={() => setScriptReady(true)}
-            />
+            {GOOGLE_CLIENT_ID && (
+                <Script
+                    src="https://accounts.google.com/gsi/client"
+                    strategy="afterInteractive"
+                    onLoad={() => setScriptReady(true)}
+                    onError={() => setError("Google giriş servisine ulaşılamadı. Lütfen tekrar deneyin.")}
+                />
+            )}
 
             <div className="w-full max-w-md">
                 {toast && (
@@ -166,8 +171,8 @@ export default function GoogleLoginPage() {
                             {GOOGLE_CLIENT_ID ? (
                                 <div ref={buttonRef} className="w-full flex justify-center" />
                             ) : (
-                                <p className="text-sm text-white/45">
-                                    Google Client ID tanımlandıktan sonra bu alanda giriş butonu görünecek.
+                                <p className="text-center text-sm leading-relaxed text-white/65">
+                                    Google ile giriş şu anda kullanıma hazır değil. Diğer giriş yöntemleriyle devam edebilirsiniz.
                                 </p>
                             )}
                         </div>

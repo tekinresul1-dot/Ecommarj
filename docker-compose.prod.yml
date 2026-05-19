@@ -4,22 +4,22 @@
 services:
   backend:
     # Production'da port 8000 dışarıya açılmaz — tüm trafik Nginx üzerinden geçer
-    ports: []
+    ports: !reset []
     environment:
       - DJANGO_DEBUG=False
       - POSTGRES_HOST=postgres
 
   postgres:
     # Production'da veritabanı portu dışarıya açılmaz
-    ports: []
+    ports: !reset []
 
   redis:
     # Production'da Redis portu dışarıya açılmaz (auth olmadan açık kalır)
-    ports: []
+    ports: !reset []
 
   frontend:
     # Production'da frontend portu dışarıya açılmaz — Nginx üzerinden servis edilir
-    ports: []
+    ports: !reset []
 
   nginx:
     ports:
@@ -28,4 +28,7 @@ services:
     volumes:
       - ./nginx/default_prod.conf:/etc/nginx/conf.d/default.conf:ro
       - ./backend/staticfiles:/app/staticfiles:ro
-      - /etc/letsencrypt/archive/ecommarj.com:/etc/letsencrypt/live/ecommarj.com:ro
+      - /etc/letsencrypt/live/ecommarj.com:/etc/letsencrypt/live/ecommarj.com:ro
+      - /etc/letsencrypt/archive/ecommarj.com:/etc/letsencrypt/archive/ecommarj.com:ro
+      # Certbot webroot — otomatik yenilemede ACME challenge dosyaları buradan servis edilir
+      - /var/www/certbot:/var/www/certbot:ro

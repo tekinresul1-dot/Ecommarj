@@ -1,8 +1,8 @@
 from django.urls import path
 from .auth_views import (
     RegisterView, RegisterVerifyView, RegisterResendOTPView,
-    LoginView, MeView, SendOTPView, VerifyOTPView, UpdateOnboardingStatusView,
-    GoogleLoginView,
+    LoginView, MeView, LogoutView, SendOTPView, VerifyOTPView, UpdateOnboardingStatusView,
+    GoogleLoginView, GoogleOAuthCallbackView,
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
@@ -28,9 +28,11 @@ urlpatterns = [
     path("auth/register/resend-otp/", RegisterResendOTPView.as_view(), name="auth-register-resend"),
     path("auth/login/", LoginView.as_view(), name="auth-login"),
     path("auth/google/", GoogleLoginView.as_view(), name="auth-google"),
+    path("auth/google/callback/", GoogleOAuthCallbackView.as_view(), name="auth-google-callback"),
     path("auth/send-otp/", SendOTPView.as_view(), name="auth-send-otp"),
     path("auth/verify-otp/", VerifyOTPView.as_view(), name="auth-verify-otp"),
     path("auth/me/", MeView.as_view(), name="auth-me"),
+    path("auth/logout/", LogoutView.as_view(), name="auth-logout"),
     path("auth/onboarding/status/", UpdateOnboardingStatusView.as_view(), name="auth-onboarding-status"),
     path("auth/token/refresh/", TokenRefreshView.as_view(), name="auth-token-refresh"),
 

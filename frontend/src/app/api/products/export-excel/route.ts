@@ -4,6 +4,10 @@ export async function GET(request: NextRequest) {
   const backendUrl = 'http://backend:8000/api/products/export-excel/';
   const authHeader = request.headers.get('Authorization');
 
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return NextResponse.json({ error: 'Yetkilendirme gerekli.' }, { status: 401 });
+  }
+
   const response = await fetch(backendUrl, {
     headers: authHeader ? { Authorization: authHeader } : {},
   });

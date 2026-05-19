@@ -1,0 +1,19 @@
+User-agent: *
+Allow: /
+
+# Uygulama (kimlik doğrulamalı) alanları indeksleme
+Disallow: /dashboard
+Disallow: /live
+Disallow: /products
+Disallow: /reports
+Disallow: /settings
+Disallow: /subscription
+Disallow: /margins
+Disallow: /payouts
+Disallow: /alerts
+Disallow: /pricing-rules
+Disallow: /product-settings
+Disallow: /promo-profit
+Disallow: /api/
+
+Sitemap: https://ecommarj.com/sitemap.xml

@@ -1,9 +1,11 @@
 """
 Sync API Views — REST endpoints for triggering and monitoring Trendyol sync operations.
 """
+import hmac
 import logging
 from datetime import datetime, timezone as dt_timezone
 
+from django.conf import settings
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -150,9 +152,18 @@ class TrendyolClaimsSyncView(APIView):
 
 class TrendyolWebhookView(APIView):
     """POST /api/integrations/trendyol/webhook/ — Process Trendyol webhook events."""
-    permission_classes = []  # Webhook — no auth (Trendyol sends events)
+    permission_classes = []  # No JWT — authenticated via shared-secret header
+    authentication_classes = []
 
     def post(self, request):
+        # Shared-secret gate: without this the endpoint is an unauthenticated
+        # Celery-task trigger oracle (DoS / Trendyol rate-limit exhaustion).
+        configured = settings.TRENDYOL_WEBHOOK_SECRET
+        provided = request.headers.get("X-Webhook-Secret", "")
+        if not configured or not hmac.compare_digest(str(configured), str(provided)):
+            logger.warning("[Webhook] Rejected — missing/invalid X-Webhook-Secret")
+            return Response({"detail": "Unauthorized."}, status=status.HTTP_401_UNAUTHORIZED)
+
         event_type = request.data.get("eventType") or request.data.get("type", "")
         logger.info(f"[Webhook] Received event: {event_type}")
 

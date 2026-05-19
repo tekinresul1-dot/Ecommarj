@@ -4,6 +4,7 @@ import { useState, FormEvent, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { setSession } from "@/lib/session";
 
 type LoginMode = "password" | "otp";
 type OtpStep = "email" | "code";
@@ -59,9 +60,7 @@ export default function LoginPage() {
         setIsLoading(true);
         try {
             const data = await api.post("/auth/login/", { email, password });
-            localStorage.setItem("access_token", data.tokens.access);
-            localStorage.setItem("refresh_token", data.tokens.refresh);
-            localStorage.setItem("user", JSON.stringify(data.user));
+            setSession(data.tokens.access, data.tokens.refresh, data.user);
             showToast("Giriş başarılı! Yönlendiriliyorsunuz...", "success");
             setTimeout(() => router.push("/dashboard"), 1500);
         } catch (error: any) {
@@ -102,9 +101,7 @@ export default function LoginPage() {
         setIsLoading(true);
         try {
             const data = await api.post("/auth/verify-otp/", { email: otpEmail, otp: otpCode });
-            localStorage.setItem("access_token", data.tokens.access);
-            localStorage.setItem("refresh_token", data.tokens.refresh);
-            localStorage.setItem("user", JSON.stringify(data.user));
+            setSession(data.tokens.access, data.tokens.refresh, data.user);
             showToast("Giriş başarılı! Yönlendiriliyorsunuz...", "success");
             setTimeout(() => router.push("/dashboard"), 1500);
         } catch (error: any) {

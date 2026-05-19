@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, FormEvent, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { setSession } from "@/lib/session";
 
 function VerificationPageInner() {
     const router = useRouter();
@@ -92,9 +93,7 @@ function VerificationPageInner() {
                 otp: fullCode,
             });
 
-            localStorage.setItem("access_token", data.tokens.access);
-            localStorage.setItem("refresh_token", data.tokens.refresh);
-            localStorage.setItem("user", JSON.stringify(data.user));
+            setSession(data.tokens.access, data.tokens.refresh, data.user);
 
             showToast("Hesap doğrulandı! Yönlendiriliyorsunuz...");
             setTimeout(() => router.push("/dashboard"), 1500);

@@ -1906,11 +1906,25 @@ class ProductExcelExportView(APIView):
     permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
-        from core.models import UserProfile, Product
+        from core.models import UserProfile, Product, OrderItem
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
         org = profile.organization
 
-        products = Product.objects.filter(organization=org, is_active=True).prefetch_related('variants').order_by(
+        # Default: yalnızca SATIŞI olan + AKTİF ürünleri export et
+        # (Trendyol kataloğunda binlerce satılmamış ürün varsa Excel anlamsız
+        # büyür — cost warning ile aynı semantik).  ?all=true ile tüm aktif
+        # katalog geri yüklenebilir (geri uyumluluk: toplu maliyet yükleme
+        # iş akışı için).
+        base_qs = Product.objects.filter(organization=org, is_active=True)
+        include_all = request.query_params.get("all", "false").lower() in ("true", "1", "yes")
+        if not include_all:
+            sold_pids_qs = OrderItem.objects.filter(
+                order__organization=org,
+                product_variant__isnull=False,
+            ).values_list("product_variant__product_id", flat=True).distinct()
+            base_qs = base_qs.filter(id__in=sold_pids_qs)
+
+        products = base_qs.prefetch_related('variants').order_by(
             django_models.F('trendyol_created_at').desc(nulls_last=True)
         )
 

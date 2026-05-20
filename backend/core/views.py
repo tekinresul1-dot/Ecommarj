@@ -200,13 +200,25 @@ class DashboardOverviewView(APIView):
         # Toplam Ciro: Aktif sipariş kalemlerinin sale_price_net toplamı
         # Ürün maliyet uyarısı için sayım (filtre öncesi)
         from core.models import ProductVariant, Product as ProductModel
-        _total_org_products = ProductModel.objects.filter(organization=org).count()
+        # Cost-warning sayimi: yalnizca AKTIF ve gercekten SATISI olan
+        # urunler (ProductCostStatusView ile ayni mantik). Trendyol
+        # katalogundaki binlerce satilmamis urun kafa karistirici bir sayi
+        # uretmesin diye OrderItem uzerinden subquery uygulanir.
+        _sold_pids_qs = OrderItem.objects.filter(
+            order__organization=org,
+            product_variant__isnull=False,
+        ).values_list("product_variant__product_id", flat=True).distinct()
+        _total_org_products = ProductModel.objects.filter(
+            organization=org, is_active=True, id__in=_sold_pids_qs
+        ).count()
         _products_with_cost = ProductVariant.objects.filter(
             product__organization=org,
+            product__is_active=True,
+            product_id__in=_sold_pids_qs,
             cost_price__isnull=False,
-            cost_price__gt=0
+            cost_price__gt=0,
         ).values("product").distinct().count()
-        _products_without_cost = _total_org_products - _products_with_cost
+        _products_without_cost = max(0, _total_org_products - _products_with_cost)
 
         # Sadece maliyeti girilmiş ürünlerin sipariş kalemlerini hesapla
         active_items_qs = OrderItem.objects.filter(
@@ -468,13 +480,29 @@ class ProductCostStatusView(APIView):
             organization=org, is_active=True
         ).exists()
 
-        total_products = Product.objects.filter(organization=org).count()
+        # Yalnızca AKTİF ve gerçekten SATIŞI olan ürünleri say. Trendyol
+        # katalogu çoğu satıcıda on binlerce ürün barındırır ama bunların
+        # küçük bir kısmı satılır; "maliyeti eksik" uyarısı yalnızca kâr
+        # hesabı için gereken bu alt küme için anlamlıdır. Aksi halde
+        # kullanıcıya "39 bin ürünün maliyeti eksik" gibi yanıltıcı bir
+        # sayı gösterilirdi.
+        from core.models import OrderItem as _OI
+        sold_pids_qs = _OI.objects.filter(
+            order__organization=org,
+            product_variant__isnull=False,
+        ).values_list("product_variant__product_id", flat=True).distinct()
+
+        total_products = Product.objects.filter(
+            organization=org, is_active=True, id__in=sold_pids_qs
+        ).count()
         products_with_cost = ProductVariant.objects.filter(
             product__organization=org,
+            product__is_active=True,
+            product_id__in=sold_pids_qs,
             cost_price__isnull=False,
-            cost_price__gt=0
+            cost_price__gt=0,
         ).values("product").distinct().count()
-        products_without_cost = total_products - products_with_cost
+        products_without_cost = max(0, total_products - products_with_cost)
 
         return Response({
             "has_costs": products_with_cost > 0,

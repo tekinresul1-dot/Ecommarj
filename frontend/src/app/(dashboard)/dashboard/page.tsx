@@ -8,7 +8,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, PieChart, Pie, Legend, FunnelChart, Funnel, LabelList
 } from "recharts";
 import {
-  TrendingUp, TrendingDown, DollarSign, Package, AlertCircle, ShoppingCart, Info, RefreshCw, AlertTriangle, X, ArrowRight
+  TrendingUp, TrendingDown, DollarSign, Package, AlertCircle, ShoppingCart, Info, RefreshCw, AlertTriangle, X, ArrowRight, ReceiptText
 } from "lucide-react";
 import clsx from "clsx";
 import { api } from "@/lib/api";
@@ -22,11 +22,44 @@ const formatTR = (val: number | string) => {
   return new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY' }).format(num);
 };
 
+const toNumber = (val: Numericish | undefined) => {
+  if (val === undefined || val === null) return 0;
+  return typeof val === "string" ? parseFloat(val) : val;
+};
+
 import { Suspense } from "react";
+
+type Numericish = number | string;
+
+interface DashboardData {
+  kpis: Record<string, Numericish>;
+  profit_breakdown: Record<string, Numericish>;
+  net_profit_funnel?: Array<{ name: string; value: Numericish }>;
+  order_metrics?: Record<string, Numericish>;
+  product_metrics?: Record<string, Numericish>;
+  return_metrics?: Record<string, Numericish>;
+  ads_metrics?: Record<string, Numericish>;
+  profit_performance_history?: Array<Record<string, Numericish>>;
+  low_stock_alerts?: unknown[];
+  che_finance?: CheFinance;
+}
+
+interface CheFinance {
+  has_data?: boolean;
+  last_sync_at?: string | null;
+  verified_commission_total?: Numericish;
+  seller_revenue_total?: Numericish;
+}
+
+interface ProductCostResponse {
+  has_costs: boolean;
+  total_products: number;
+  products_without_cost: number;
+}
 
 function DashboardContent() {
   const searchParams = useSearchParams();
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [syncing, setSyncing] = useState(false);
@@ -49,7 +82,7 @@ function DashboardContent() {
     setCostWarningMounted(false);
     setCostWarningVisible(false);
     try {
-      const json = await api.get(`/dashboard/overview/?${searchParams.toString()}`);
+      const json = await api.get(`/dashboard/overview/?${searchParams.toString()}`) as DashboardData;
       setData(json);
     } catch (err) {
       console.error(err);
@@ -66,7 +99,7 @@ function DashboardContent() {
   // Maliyet uyarısı: sayfa yüklenince veya searchParams değişince çek
   useEffect(() => {
     api.get("/user/product-cost-status/")
-      .then((res: any) => {
+      .then((res: ProductCostResponse) => {
         if (!res.has_costs && res.total_products > 0) {
           setCostWarning({ products_without_cost: res.products_without_cost, total_products: res.total_products });
           setCostWarningMounted(true);
@@ -124,17 +157,17 @@ function DashboardContent() {
   ];
 
   const breakdownData = [
-    { name: "Ürün Maliyeti", value: parseFloat(data.profit_breakdown.PRODUCT_COST || 0) },
-    { name: "Komisyon", value: parseFloat(data.profit_breakdown.COMMISSION || 0) },
-    { name: "Kargo Ücreti", value: parseFloat(data.profit_breakdown.SHIPPING_FEE || 0) },
-    { name: "Hizmet Bedeli", value: parseFloat(data.profit_breakdown.SERVICE_FEE || 0) },
-    { name: "Satış KDV / Stopaj", value: parseFloat(data.profit_breakdown.VAT_OUTPUT || 0) + parseFloat(data.profit_breakdown.WITHHOLDING || 0) },
-    { name: "Ceza & Erken Öd.", value: parseFloat(data.profit_breakdown.PENALTY || 0) + parseFloat(data.profit_breakdown.EARLY_PAYMENT || 0) },
+    { name: "Ürün Maliyeti", value: toNumber(data.profit_breakdown.PRODUCT_COST) },
+    { name: "Komisyon", value: toNumber(data.profit_breakdown.COMMISSION) },
+    { name: "Kargo Ücreti", value: toNumber(data.profit_breakdown.SHIPPING_FEE) },
+    { name: "Hizmet Bedeli", value: toNumber(data.profit_breakdown.SERVICE_FEE) },
+    { name: "Satış KDV / Stopaj", value: toNumber(data.profit_breakdown.VAT_OUTPUT) + toNumber(data.profit_breakdown.WITHHOLDING) },
+    { name: "Ceza & Erken Öd.", value: toNumber(data.profit_breakdown.PENALTY) + toNumber(data.profit_breakdown.EARLY_PAYMENT) },
   ].filter(i => i.value > 0);
 
-  const funnelData = (data.net_profit_funnel || []).map((f: any, i: number) => ({
+  const funnelData = (data.net_profit_funnel || []).map((f, i: number) => ({
     name: f.name,
-    value: parseFloat(f.value),
+    value: toNumber(f.value),
     fill: FUNNEL_COLORS[i % FUNNEL_COLORS.length]
   }));
 
@@ -144,6 +177,7 @@ function DashboardContent() {
   const pMetrics = data.product_metrics || {};
   const rMetrics = data.return_metrics || {};
   const aMetrics = data.ads_metrics || {};
+  const cheFinance = data.che_finance || {};
 
   return (
     <div className="p-4 sm:p-4 lg:p-6 max-w-[1400px] mx-auto space-y-6">
@@ -173,6 +207,34 @@ function DashboardContent() {
 
       <GlobalFilter />
 
+      {/* CHE Finans Durumu */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="md:col-span-2 bg-navy-900 border border-white/10 rounded-xl px-4 py-3 flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
+            <ReceiptText className="w-4 h-4 text-blue-300" />
+          </div>
+          <div>
+            <p className="text-xs text-white/45">Cari hesap ekstresi</p>
+            <p className="text-sm font-semibold text-white">
+              {cheFinance.has_data ? "Finans verisi bağlı" : "Finans verisi bekleniyor"}
+            </p>
+            {cheFinance.last_sync_at && (
+              <p className="text-[11px] text-white/35 mt-0.5">
+                Son kayıt: {new Date(cheFinance.last_sync_at).toLocaleString("tr-TR")}
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="bg-navy-900 border border-white/10 rounded-xl px-4 py-3">
+          <p className="text-xs text-white/45">Doğrulanmış komisyon</p>
+          <p className="text-sm font-semibold text-orange-300">{formatTR(cheFinance.verified_commission_total || 0)}</p>
+        </div>
+        <div className="bg-navy-900 border border-white/10 rounded-xl px-4 py-3">
+          <p className="text-xs text-white/45">Hakediş kaydı</p>
+          <p className="text-sm font-semibold text-green-300">{formatTR(cheFinance.seller_revenue_total || 0)}</p>
+        </div>
+      </div>
+
       {/* Maliyet Uyarısı Banner */}
       {costWarningMounted && costWarning && (
         <div
@@ -185,7 +247,7 @@ function DashboardContent() {
         >
           <AlertTriangle className="w-4 h-4 text-orange-400 shrink-0" />
           <span className="text-orange-200 flex-1">
-            <span className="font-semibold text-orange-300">{costWarning.products_without_cost} ürününüzün</span> maliyeti girilmemiş. Karlılık verileri hesaplanamıyor.
+            <span className="font-semibold text-orange-300">{costWarning.products_without_cost} ürününüzün</span> maliyeti girilmemiş. Ciro ve satış verileri hesaplanır; net kâr için maliyetleri tamamlayın.
           </span>
           <button
             onClick={() => { dismissCostWarning(); window.location.href = "/products"; }}
@@ -237,7 +299,7 @@ function DashboardContent() {
                       ))}
                     </Pie>
                     <Tooltip
-                      formatter={(value: any) => formatTR(value)}
+                      formatter={(value) => formatTR(Number(value || 0))}
                       contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px', fontSize: '13px' }}
                       itemStyle={{ color: '#fff' }}
                     />
@@ -306,7 +368,7 @@ function DashboardContent() {
               <ResponsiveContainer width="100%" height="100%">
                 <FunnelChart>
                   <Tooltip
-                    formatter={(value: any) => formatTR(value)}
+                    formatter={(value) => formatTR(Number(value || 0))}
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px', fontSize: '13px' }}
                   />
                   <Funnel

@@ -3,7 +3,8 @@ Sync API Views — REST endpoints for triggering and monitoring Trendyol sync op
 """
 import hmac
 import logging
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from rest_framework import status
@@ -14,6 +15,24 @@ from rest_framework.permissions import IsAuthenticated
 from core.models import MarketplaceAccount, SyncAuditLog, SyncCheckpoint
 
 logger = logging.getLogger(__name__)
+ISTANBUL_TZ = ZoneInfo("Europe/Istanbul")
+
+
+def _parse_sync_boundary(value: str, *, is_end: bool):
+    """Date-only değerleri İstanbul gün sınırı olarak, ISO değerleri kendi tz'iyle okur."""
+    if len(value) == 10:
+        hour, minute, second, microsecond = (23, 59, 59, 999999) if is_end else (0, 0, 0, 0)
+        return datetime.fromisoformat(value).replace(
+            hour=hour,
+            minute=minute,
+            second=second,
+            microsecond=microsecond,
+            tzinfo=ISTANBUL_TZ,
+        )
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ISTANBUL_TZ)
+    return parsed
 
 
 def _get_account(user):
@@ -98,8 +117,8 @@ class TrendyolBackfillSyncView(APIView):
             return Response({"error": "start_date ve end_date zorunlu"}, status=400)
 
         try:
-            start_date = datetime.fromisoformat(start_date_str).replace(tzinfo=dt_timezone.utc)
-            end_date = datetime.fromisoformat(end_date_str).replace(tzinfo=dt_timezone.utc)
+            start_date = _parse_sync_boundary(start_date_str, is_end=False)
+            end_date = _parse_sync_boundary(end_date_str, is_end=True)
         except ValueError:
             return Response({"error": "Tarih formatı: YYYY-MM-DD"}, status=400)
 

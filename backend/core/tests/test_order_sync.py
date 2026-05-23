@@ -20,6 +20,7 @@ from core.models import (
     Organization, MarketplaceAccount, Order, OrderItem,
     ProductVariant, Product, SyncAuditLog,
 )
+from core.services.order_amounts import parse_order_line_amounts
 from core.services.trendyol_client import compute_payload_hash
 
 
@@ -164,3 +165,28 @@ class PayloadHashTests(TestCase):
         data1 = {"a": 1}
         data2 = {"a": 2}
         self.assertNotEqual(compute_payload_hash(data1), compute_payload_hash(data2))
+
+
+class OrderAmountParsingTests(TestCase):
+    def test_uses_split_discount_fields_when_discount_is_missing(self):
+        amounts = parse_order_line_amounts({
+            "amount": "483.00",
+            "merchantDiscount": "20.00",
+            "platformDiscount": "10.61",
+            "couponDiscount": "0.00",
+        })
+
+        self.assertEqual(amounts["gross"], Decimal("483.00"))
+        self.assertEqual(amounts["discount"], Decimal("30.61"))
+        self.assertEqual(amounts["net"], Decimal("452.39"))
+
+    def test_discounted_price_prevents_double_discounting(self):
+        amounts = parse_order_line_amounts({
+            "amount": "120.00",
+            "discount": "20.00",
+            "discountedPrice": "100.00",
+        })
+
+        self.assertEqual(amounts["gross"], Decimal("120.00"))
+        self.assertEqual(amounts["discount"], Decimal("20.00"))
+        self.assertEqual(amounts["net"], Decimal("100.00"))

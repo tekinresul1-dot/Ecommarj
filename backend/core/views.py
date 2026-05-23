@@ -9,6 +9,7 @@ from django.utils import timezone
 logger = logging.getLogger(__name__)
 from django.db import models as django_models
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from django.db.models import Prefetch
 from core.models import (
@@ -30,12 +31,77 @@ MONTHS_TR = {
 # Satış olarak sayılan: sadece teslim onaylanmış siparişler
 # Shipped (kargoda) henüz teslim kesinleşmedi → Trendyol da saymıyor
 SALE_STATUSES = ["Delivered"]
+# Dashboard "Toplam Ciro" Trendyol Satış & Operasyon mantığına yakın çalışır:
+# teslim edilmiş ve kargoya verilmiş satışlar net satış havuzunda kalır.
+# Picking/Created henüz satışa dönüşmediği için Trendyol net satış gibi dışarıda tutulur.
+DASHBOARD_REVENUE_STATUSES = ["Delivered", "Shipped"]
 # Kargo hareketi olan iade/teslim edilemedi — kargo zararı oluşur
 RETURN_STATUSES = ["Returned", "UnDelivered"]
 # Sevkiyat yapılmamış iptal/tedarik edilemedi — kargo zararı yok
 CANCEL_STATUSES = ["Cancelled", "UnSupplied"]
+# Trendyol Satış & Operasyon'daki "Brüt Satış" satışa konu olmuş,
+# sonradan iptal/iade ile netten düşülebilen statülerden oluşur.
+GROSS_SALES_STATUSES = DASHBOARD_REVENUE_STATUSES + RETURN_STATUSES + CANCEL_STATUSES
 # Satış sayılmayan tüm statüler
 NON_SALE_STATUSES = RETURN_STATUSES + CANCEL_STATUSES
+ISTANBUL_TZ = ZoneInfo("Europe/Istanbul")
+
+
+def parse_istanbul_date_range(min_date_str, max_date_str):
+    """YYYY-MM-DD aralığını Europe/Istanbul'da dahil gün sınırlarına çevirir."""
+    from datetime import datetime as dt_cls, time as dt_time
+
+    if not (min_date_str and max_date_str):
+        return None, None
+    try:
+        min_date = dt_cls.strptime(min_date_str, "%Y-%m-%d").replace(
+            hour=0, minute=0, second=0, microsecond=0, tzinfo=ISTANBUL_TZ
+        )
+        max_date = dt_cls.combine(
+            dt_cls.strptime(max_date_str, "%Y-%m-%d").date(),
+            dt_time.max,
+            tzinfo=ISTANBUL_TZ,
+        )
+        return min_date, max_date
+    except ValueError:
+        return None, None
+
+def get_actionable_products_queryset(org):
+    """
+    Ürün ayarları ve dashboard uyarıları için işlem yapılacak ürün havuzu.
+    Tüm 39k barkodu değil, stoklu veya son 60 günde sipariş almış ürünleri sayar.
+    """
+    import datetime
+    recent_since = timezone.now() - datetime.timedelta(days=60)
+
+    recent_variant_barcodes = OrderItem.objects.filter(
+        order__organization=org,
+        order__order_date__gte=recent_since,
+        product_variant__isnull=False,
+    ).exclude(
+        product_variant__barcode=""
+    ).values_list("product_variant__barcode", flat=True)
+
+    recent_skus = OrderItem.objects.filter(
+        order__organization=org,
+        order__order_date__gte=recent_since,
+    ).exclude(
+        sku=""
+    ).values_list("sku", flat=True)
+
+    return Product.objects.filter(
+        organization=org,
+        is_active=True,
+    ).filter(
+        django_models.Q(current_stock__gt=0) |
+        django_models.Q(variants__stock__gt=0) |
+        django_models.Q(barcode__in=recent_variant_barcodes) |
+        django_models.Q(variants__barcode__in=recent_variant_barcodes) |
+        django_models.Q(barcode__in=recent_skus) |
+        django_models.Q(variants__barcode__in=recent_skus) |
+        django_models.Q(marketplace_sku__in=recent_skus) |
+        django_models.Q(variants__marketplace_sku__in=recent_skus)
+    ).distinct()
 
 def format_date_tr(dt):
     if not dt:
@@ -132,7 +198,8 @@ class DashboardOverviewView(APIView):
     GET /api/dashboard/overview
     Filtrelere göre Sipariş, Ürün ve Finansal verileri toplayıp gerçek KPI döndürür.
     
-    Toplam Ciro = Sipariş kayıtlarındaki sale_price_net toplamı (Trendyol'un "amount" alanı — indirimli satış fiyatı)
+    Toplam Ciro = Trendyol Satış & Operasyon mantığına yakın net satış havuzu
+    (iptal/iade dışı operasyonel statüler, paket son güncelleme tarihi bazlı)
     Maliyetlendirilen Ciro = Sadece maliyeti tanımlı ürünlerin cirosu
     Kâr Tutarı = Maliyetlendirilen ciro üzerinden ProfitCalculator ile hesaplanan kâr
     """
@@ -141,7 +208,6 @@ class DashboardOverviewView(APIView):
     def get(self, request):
         user = request.user
         from core.models import UserProfile, Organization
-        from datetime import datetime as dt_cls, time as dt_time, timezone as dt_tz
         from collections import defaultdict
         
         profile, _ = UserProfile.objects.get_or_create(user=user)
@@ -172,80 +238,113 @@ class DashboardOverviewView(APIView):
             country_list = [c.strip() for c in countries.split(",")]
             orders_qs = orders_qs.filter(country_code__in=country_list)
 
-        if min_date_str and max_date_str:
-            try:
-                min_date = dt_cls.strptime(min_date_str, "%Y-%m-%d").replace(tzinfo=dt_tz.utc)
-                max_date = dt_cls.combine(
-                    dt_cls.strptime(max_date_str, "%Y-%m-%d"), dt_time.max
-                ).replace(tzinfo=dt_tz.utc)
-                orders_qs = orders_qs.filter(order_date__gte=min_date, order_date__lte=max_date)
-            except ValueError:
-                pass
+        min_date, max_date = parse_istanbul_date_range(min_date_str, max_date_str)
+        if min_date and max_date:
+            orders_qs = orders_qs.filter(
+                django_models.Q(last_modified_date__gte=min_date, last_modified_date__lte=max_date) |
+                django_models.Q(last_modified_date__isnull=True, order_date__gte=min_date, order_date__lte=max_date)
+            )
 
         # ---------------------------------------------------------------
-        # 1. TOPLAM CİRO = Direkt sipariş kayıtlarından (Trendyol gibi)
-        #    - Tüm siparişlerin "sale_price_net" (indirimli satış tutarı) toplamı
-        #    - İptal ve iade düşülmüş hali (aktif siparişler)
+        # 1. TOPLAM CİRO = Trendyol Satış & Operasyon net satış mantığı
+        #    Brüt Satış - İptaller - İadeler - İndirimler
         # ---------------------------------------------------------------
         total_orders = orders_qs.count()
 
-        # Sadece gerçekleşmiş satışlar: Delivered + Shipped
-        # UnDelivered / Cancelled / Returned / UnSupplied / Picking / Created satış değil
-        active_orders_qs = orders_qs.filter(status__in=SALE_STATUSES)
+        # Dashboard ciro havuzu: Trendyol net satışa yakın olacak şekilde
+        # iptal/iade dışındaki operasyonel satışlar.
+        active_orders_qs = orders_qs.filter(status__in=DASHBOARD_REVENUE_STATUSES)
         cancelled_orders_qs = orders_qs.filter(status__in=NON_SALE_STATUSES)
 
         active_order_count = active_orders_qs.count()
         cancelled_count = cancelled_orders_qs.count()
 
-        # Toplam Ciro: Aktif sipariş kalemlerinin sale_price_net toplamı
-        # Ürün maliyet uyarısı için sayım (filtre öncesi)
-        from core.models import ProductVariant, Product as ProductModel
-        # Cost-warning sayimi: yalnizca AKTIF ve gercekten SATISI olan
-        # urunler (ProductCostStatusView ile ayni mantik). Trendyol
-        # katalogundaki binlerce satilmamis urun kafa karistirici bir sayi
-        # uretmesin diye OrderItem uzerinden subquery uygulanir.
-        _sold_pids_qs = OrderItem.objects.filter(
-            order__organization=org,
-            product_variant__isnull=False,
-        ).values_list("product_variant__product_id", flat=True).distinct()
-        _total_org_products = ProductModel.objects.filter(
-            organization=org, is_active=True, id__in=_sold_pids_qs
-        ).count()
+        # Ciro, maliyet girilip girilmediğinden bağımsız hesaplanır; aksi halde
+        # maliyetsiz hesaplarda dashboard tüm satışları eksik gösterir.
+        from core.models import ProductVariant
+        _actionable_products_qs = get_actionable_products_queryset(org)
+        _total_org_products = _actionable_products_qs.count()
         _products_with_cost = ProductVariant.objects.filter(
             product__organization=org,
-            product__is_active=True,
-            product_id__in=_sold_pids_qs,
+            product__in=_actionable_products_qs,
             cost_price__isnull=False,
-            cost_price__gt=0,
+            cost_price__gt=0
         ).values("product").distinct().count()
-        _products_without_cost = max(0, _total_org_products - _products_with_cost)
+        _products_without_cost = _total_org_products - _products_with_cost
 
-        # Sadece maliyeti girilmiş ürünlerin sipariş kalemlerini hesapla
-        active_items_qs = OrderItem.objects.filter(
-            order__in=active_orders_qs,
-            product_variant__cost_price__isnull=False,
-            product_variant__cost_price__gt=0
-        )
-        
-        revenue_agg = active_items_qs.aggregate(
+        gross_orders_qs = orders_qs.filter(status__in=GROSS_SALES_STATUSES)
+        all_items_in_range_qs = OrderItem.objects.filter(order__in=gross_orders_qs)
+        excluded_by_status_qs = OrderItem.objects.filter(order__in=orders_qs).exclude(order__status__in=GROSS_SALES_STATUSES)
+        active_items_all_qs = OrderItem.objects.filter(order__in=active_orders_qs)
+
+        revenue_agg = active_items_all_qs.aggregate(
             total_gross=django_models.Sum("sale_price_gross"),
             total_net=django_models.Sum("sale_price_net"),
             total_discount=django_models.Sum("discount"),
             total_items=django_models.Count("id"),
             total_quantity=django_models.Sum("quantity"),
         )
-        
-        toplam_ciro = revenue_agg["total_net"] or Decimal("0.00")
-        total_gross = revenue_agg["total_gross"] or Decimal("0.00")
-        total_discount = revenue_agg["total_discount"] or Decimal("0.00")
+
+        gross_all_agg = all_items_in_range_qs.aggregate(
+            gross=django_models.Sum("sale_price_gross"),
+            net=django_models.Sum("sale_price_net"),
+            discount=django_models.Sum("discount"),
+            qty=django_models.Sum("quantity"),
+        )
+        cancelled_agg = all_items_in_range_qs.filter(order__status__in=CANCEL_STATUSES).aggregate(
+            total=django_models.Sum("sale_price_net"),
+            qty=django_models.Sum("quantity"),
+        )
+        returned_status_agg = all_items_in_range_qs.filter(order__status__in=RETURN_STATUSES).aggregate(
+            total=django_models.Sum("sale_price_net"),
+            qty=django_models.Sum("quantity"),
+        )
+
+        # Trendyol Satış & Operasyon net satış formülü:
+        # Brüt Satış - İptaller - İadeler - İndirimler.
+        # İade tutarı için mevcut order status'u yeterli değil; Trendyol bazı
+        # iade kayıtlarını sipariş statüsünü Delivered bırakıp CHE Return
+        # hareketiyle bildiriyor. Bu yüzden CHE Return borcu önceliklidir.
+        from core.models import CheTransaction
+        che_returned_total = Decimal("0.00")
+        if min_date and max_date:
+            che_returned_total = CheTransaction.objects.filter(
+                organization=org,
+                source=CheTransaction.SOURCE_SETTLEMENTS,
+                transaction_type_code="Return",
+                order_date__gte=min_date,
+                order_date__lte=max_date,
+            ).aggregate(total=django_models.Sum("debt"))["total"] or Decimal("0.00")
+
+        total_gross = gross_all_agg["gross"] or Decimal("0.00")
+        total_discount = gross_all_agg["discount"] or Decimal("0.00")
+        cancelled_total = cancelled_agg["total"] or Decimal("0.00")
+        returned_status_total = returned_status_agg["total"] or Decimal("0.00")
+        returned_total = che_returned_total if che_returned_total > Decimal("0.00") else returned_status_total
+        active_net_total = revenue_agg["total_net"] or Decimal("0.00")
+        formula_net_sales = total_gross - cancelled_total - returned_total - total_discount
+        toplam_ciro = max(formula_net_sales, Decimal("0.00"))
         total_items_sold = revenue_agg["total_quantity"] or 0
         
         # ---------------------------------------------------------------
-        # 2. KARLILIK HESABI = ProfitCalculator ile (sadece maliyeti olan ürünler)
+        # 2. KARLILIK HESABI = ProfitCalculator ile sadece maliyeti olan
+        #    satırlar. Eksik maliyet satış cirosunu engellemez, yalnızca
+        #    net kâr kapsamı dışında kalır.
         # ---------------------------------------------------------------
+        active_items_qs = active_items_all_qs.filter(
+            product_variant__cost_price__isnull=False,
+            product_variant__cost_price__gt=0
+        )
+        missing_cost_items_qs = active_items_all_qs.exclude(
+            product_variant__cost_price__isnull=False,
+            product_variant__cost_price__gt=0,
+        )
+        missing_cost_revenue = missing_cost_items_qs.aggregate(
+            total=django_models.Sum("sale_price_net")
+        )["total"] or Decimal("0.00")
         total_costs = Decimal("0.00")
         total_profit = Decimal("0.00")
-        total_costed_revenue = Decimal("0.00")
+        costed_active_revenue = Decimal("0.00")
         
         breakdown = defaultdict(Decimal)
         for tx_type in FinancialTransactionType:
@@ -274,7 +373,7 @@ class DashboardOverviewView(APIView):
             
             item_product_cost = res["breakdown"].get(FinancialTransactionType.PRODUCT_COST.value, Decimal("0.00"))
             if item_product_cost > Decimal("0.00"):
-                total_costed_revenue += item.sale_price_net  # Gerçek satış fiyatı
+                costed_active_revenue += item.sale_price_net  # Gerçek satış fiyatı
             
             funnel_gross += item.sale_price_net  # Gerçek satış fiyatı
             
@@ -302,6 +401,7 @@ class DashboardOverviewView(APIView):
             c_code = item.order.country_code
             country_profits[c_code] = country_profits.get(c_code, Decimal("0.00")) + profit
 
+        total_costed_revenue = max(toplam_ciro - missing_cost_revenue, Decimal("0.00"))
         funnel_net = total_profit
 
         # Kâr Marjları
@@ -342,19 +442,17 @@ class DashboardOverviewView(APIView):
         }
         
         # İade Metrikleri
+        from core.services.return_costs import order_has_return_activity, get_return_cargo_breakdown
         return_loss_val = breakdown.get(FinancialTransactionType.RETURN_LOSS.value, Decimal("0.00"))
-        # İade oranı: kargo hareketi olan Returned+UnDelivered + iptal edilen Cancelled+UnSupplied
-        returned_orders_count = orders_qs.filter(status__in=NON_SALE_STATUSES).count()
+        returned_orders_count = sum(1 for order in orders_qs if order.status in CANCEL_STATUSES or order_has_return_activity(order))
         real_return_rate = Decimal("0.00")
         if total_orders > 0:
             real_return_rate = round(Decimal(returned_orders_count) / Decimal(total_orders) * Decimal("100"), 2)
 
-        # Kargo zararı: sadece kargoya verilip dönen siparişler (Cancelled'da kargo hareketi yok)
-        returned_items = OrderItem.objects.filter(order__in=orders_qs.filter(status__in=RETURN_STATUSES))
         total_return_cargo_loss = Decimal("0.00")
-        for r_item in returned_items:
-            r_info = ProfitCalculator.calculate_for_order_item(r_item)
-            total_return_cargo_loss += r_info["breakdown"].get(FinancialTransactionType.SHIPPING_FEE.value, Decimal("0.00"))
+        for order in orders_qs.prefetch_related("items"):
+            if order_has_return_activity(order):
+                total_return_cargo_loss += get_return_cargo_breakdown(order)["total_cargo_loss"]
         
         return_metrics = {
             "return_rate": str(real_return_rate),
@@ -428,11 +526,100 @@ class DashboardOverviewView(APIView):
         
         low_stock_list = sorted(low_stock_list, key=lambda x: x["current_stock"])[:5]
 
+        # CHE finans durumu — dashboard sipariş tarihine göre çalışır; bu özet
+        # finans kayıtlarının varlığını ve doğrulanmış komisyon/hakediş kapsamını gösterir.
+        che_qs = CheTransaction.objects.filter(organization=org)
+        if min_date_str and max_date_str:
+            try:
+                che_qs = che_qs.filter(transaction_date__gte=min_date, transaction_date__lte=max_date)
+            except Exception:
+                pass
+        che_last = CheTransaction.objects.filter(organization=org).order_by("-transaction_date").first()
+        che_commission_total = che_qs.filter(
+            source=CheTransaction.SOURCE_SETTLEMENTS,
+            commission_amount__isnull=False,
+        ).aggregate(total=django_models.Sum("commission_amount"))["total"] or Decimal("0.00")
+        che_seller_revenue_total = che_qs.filter(
+            source=CheTransaction.SOURCE_SETTLEMENTS,
+            seller_revenue__isnull=False,
+        ).aggregate(total=django_models.Sum("seller_revenue"))["total"] or Decimal("0.00")
+        che_withholding_total = che_qs.filter(
+            source=CheTransaction.SOURCE_OTHER,
+            transaction_type_code="Stoppage",
+        ).aggregate(total=django_models.Sum("debt"))["total"] or Decimal("0.00")
+        che_platform_fee_total = che_qs.filter(
+            source=CheTransaction.SOURCE_OTHER,
+            transaction_sub_type="PlatformServiceFee",
+        ).aggregate(total=django_models.Sum("debt"))["total"] or Decimal("0.00")
+
+        status_rows = list(
+            orders_qs.values("status").annotate(
+                orders=django_models.Count("id", distinct=True),
+                item_count=django_models.Count("items__id"),
+                quantity=django_models.Sum("items__quantity"),
+                gross=django_models.Sum("items__sale_price_gross"),
+                net=django_models.Sum("items__sale_price_net"),
+                discount=django_models.Sum("items__discount"),
+            ).order_by("status")
+        )
+        date_excluded_orders = 0
+        if min_date and max_date:
+            all_channel_orders_qs = Order.objects.filter(
+                organization=org,
+                channel__in=["trendyol", "micro_export"] if channel == "trendyol" else [channel],
+            )
+            if countries:
+                all_channel_orders_qs = all_channel_orders_qs.filter(country_code__in=country_list)
+            date_excluded_orders = all_channel_orders_qs.exclude(
+                django_models.Q(last_modified_date__gte=min_date, last_modified_date__lte=max_date) |
+                django_models.Q(last_modified_date__isnull=True, order_date__gte=min_date, order_date__lte=max_date)
+            ).count()
+
+        debug_payload = {
+            "seller_id": str(getattr(MarketplaceAccount.objects.filter(organization=org, is_active=True).first(), "seller_id", "")),
+            "organization_id": org.id,
+            "marketplace": channel,
+            "date_filter_field": "last_modified_date_with_order_date_fallback",
+            "date_start": min_date.isoformat() if min_date else None,
+            "date_end": max_date.isoformat() if max_date else None,
+            "orders_count": total_orders,
+            "items_count": all_items_in_range_qs.count(),
+            "included_orders_count": active_order_count,
+            "included_items_count": active_items_all_qs.count(),
+            "excluded_by_status_count": excluded_by_status_qs.count(),
+            "excluded_by_date_count": date_excluded_orders,
+            "excluded_by_missing_cost_count": missing_cost_items_qs.count(),
+            "gross_sales_total": str(gross_all_agg["gross"] or Decimal("0.00")),
+            "active_status_net_total": str(active_net_total),
+            "cancelled_total": str(cancelled_total),
+            "returned_total": str(returned_total),
+            "returned_status_total": str(returned_status_total),
+            "returned_che_total": str(che_returned_total),
+            "discount_total": str(gross_all_agg["discount"] or Decimal("0.00")),
+            "net_sales_formula": "gross_sales_total - cancelled_total - returned_total - discount_total",
+            "net_sales_total": str(toplam_ciro),
+            "costed_sales_total": str(total_costed_revenue),
+            "costed_active_sales_total": str(costed_active_revenue),
+            "missing_cost_revenue": str(missing_cost_revenue),
+            "status_breakdown": [
+                {
+                    "status": row["status"],
+                    "orders": row["orders"],
+                    "items": row["item_count"],
+                    "quantity": row["quantity"] or 0,
+                    "gross": str(row["gross"] or Decimal("0.00")),
+                    "net": str(row["net"] or Decimal("0.00")),
+                    "discount": str(row["discount"] or Decimal("0.00")),
+                }
+                for row in status_rows
+            ],
+        }
+
         return Response({
             "kpis": {
                 "total_orders": active_order_count,
                 "gross_revenue": str(total_gross),
-                "toplam_ciro": str(toplam_ciro),          # Toplam Ciro = SUM(sale_price_net) from order items
+                "toplam_ciro": str(toplam_ciro),          # Toplam Ciro = brüt - iptal - iade - indirim
                 "costed_revenue": str(total_costed_revenue),  # Maliyetlendirilen Ciro
                 "net_revenue": str(toplam_ciro),           # Keep backward compat
                 "total_costs": str(total_costs),
@@ -454,6 +641,17 @@ class DashboardOverviewView(APIView):
                 "count": _products_without_cost,
                 "total": _total_org_products,
             },
+            "che_finance": {
+                "has_data": che_qs.exists(),
+                "last_sync_at": che_last.transaction_date.isoformat() if che_last else None,
+                "settlement_count": che_qs.filter(source=CheTransaction.SOURCE_SETTLEMENTS).count(),
+                "other_financial_count": che_qs.filter(source=CheTransaction.SOURCE_OTHER).count(),
+                "verified_commission_total": str(che_commission_total),
+                "seller_revenue_total": str(che_seller_revenue_total),
+                "withholding_total": str(che_withholding_total),
+                "platform_service_fee_total": str(che_platform_fee_total),
+            },
+            "debug": debug_payload,
         })
 
 
@@ -465,7 +663,7 @@ class ProductCostStatusView(APIView):
     permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
-        from core.models import Product, ProductVariant, MarketplaceAccount, UserProfile, Organization
+        from core.models import ProductVariant, MarketplaceAccount
 
         try:
             profile = request.user.profile
@@ -480,29 +678,15 @@ class ProductCostStatusView(APIView):
             organization=org, is_active=True
         ).exists()
 
-        # Yalnızca AKTİF ve gerçekten SATIŞI olan ürünleri say. Trendyol
-        # katalogu çoğu satıcıda on binlerce ürün barındırır ama bunların
-        # küçük bir kısmı satılır; "maliyeti eksik" uyarısı yalnızca kâr
-        # hesabı için gereken bu alt küme için anlamlıdır. Aksi halde
-        # kullanıcıya "39 bin ürünün maliyeti eksik" gibi yanıltıcı bir
-        # sayı gösterilirdi.
-        from core.models import OrderItem as _OI
-        sold_pids_qs = _OI.objects.filter(
-            order__organization=org,
-            product_variant__isnull=False,
-        ).values_list("product_variant__product_id", flat=True).distinct()
-
-        total_products = Product.objects.filter(
-            organization=org, is_active=True, id__in=sold_pids_qs
-        ).count()
+        actionable_products_qs = get_actionable_products_queryset(org)
+        total_products = actionable_products_qs.count()
         products_with_cost = ProductVariant.objects.filter(
             product__organization=org,
-            product__is_active=True,
-            product_id__in=sold_pids_qs,
+            product__in=actionable_products_qs,
             cost_price__isnull=False,
-            cost_price__gt=0,
+            cost_price__gt=0
         ).values("product").distinct().count()
-        products_without_cost = max(0, total_products - products_with_cost)
+        products_without_cost = total_products - products_with_cost
 
         return Response({
             "has_costs": products_with_cost > 0,
@@ -1015,11 +1199,12 @@ class OrderListView(APIView):
         from core.services.profit_calculator import ProfitCalculator
         from decimal import Decimal
         
-        # Sadece bu organizasyona ait olan siparişleri getir, iptal edilenleri hariç tut
-        # prefetch_related ile db call optimizasyonu
-        CANCELLED_STATUSES = ['Cancelled', 'Canceled', 'İptal', 'iptal', 'CANCELLED', 'CANCELED']
-        orders = Order.objects.filter(marketplace_account__organization=org).exclude(
-            status__in=CANCELLED_STATUSES
+        # Kârlılık listesi yalnızca gerçek satış kabul edilen teslim edilmiş
+        # siparişlerden oluşur. İptal/tedarik edilemedi/iade/teslim edilemedi
+        # kayıtları Trendyol CHE'de hakediş üretmediği için bu listeye girmez.
+        orders = Order.objects.filter(
+            marketplace_account__organization=org,
+            status__in=SALE_STATUSES,
         ).prefetch_related('items__product_variant__product', 'items__transactions').order_by('-order_date')
         
         min_date_str = request.query_params.get("min_date")
@@ -1085,6 +1270,7 @@ class OrderListView(APIView):
                     "extra_cost":         str(calc["extra_product_cost"]),
                     "commission":         str(calc["commission"]),
                     "shipping_fee":       str(calc["cargo"]),
+                    "return_cargo_loss":  str(calc.get("return_cargo_loss", Decimal("0.00"))),
                     "cargo_source":       calc.get("cargo_source", "estimated"),
                     "service_fee":        str(calc["service_fee"]),
                     "withholding":        str(calc["withholding"]),
@@ -1123,7 +1309,8 @@ class OrderExcelExportView(APIView):
         from django.http import HttpResponse
 
         orders = Order.objects.filter(
-            marketplace_account__organization=org
+            marketplace_account__organization=org,
+            status__in=SALE_STATUSES,
         ).prefetch_related(
             'items__product_variant__product',
             'items__transactions'
@@ -1170,22 +1357,18 @@ class OrderExcelExportView(APIView):
             ws.column_dimensions[ws.cell(1, i).column_letter].width = 22
 
         for order in orders:
-            total_gross = Decimal("0.00")
-            total_profit = Decimal("0.00")
-            bd = {k: Decimal("0.00") for k in ["product_cost", "extra_cost", "commission", "shipping_fee", "service_fee", "withholding", "net_kdv"]}
-
-            for item in order.items.all():
-                pi = ProfitCalculator.calculate_for_order_item(item)
-                total_gross += pi["gross_revenue"]
-                total_profit += pi["net_profit"]
-                b = pi["breakdown"]
-                bd["product_cost"] += b.get("PRODUCT_COST", Decimal("0.00"))
-                bd["extra_cost"] += pi.get("extra_product_cost", Decimal("0.00"))
-                bd["commission"] += b.get("COMMISSION", Decimal("0.00"))
-                bd["shipping_fee"] += b.get("SHIPPING_FEE", Decimal("0.00"))
-                bd["service_fee"] += b.get("SERVICE_FEE", Decimal("0.00"))
-                bd["withholding"] += b.get("WITHHOLDING", Decimal("0.00"))
-                bd["net_kdv"] += pi.get("kdv_detail", {}).get("net_kdv", Decimal("0.00"))
+            calc = ProfitCalculator.calculate_for_order(order)
+            total_gross = calc["total_sale"]
+            total_profit = calc["net_profit"]
+            bd = {
+                "product_cost": calc["product_cost"],
+                "extra_cost": calc.get("extra_product_cost", Decimal("0.00")),
+                "commission": calc["commission"],
+                "shipping_fee": calc["cargo"] + calc.get("return_cargo_loss", Decimal("0.00")),
+                "service_fee": calc["service_fee"],
+                "withholding": calc["withholding"],
+                "net_kdv": calc["kdv_detail"]["net_kdv"],
+            }
 
             profit_margin = round((total_profit / total_gross) * 100, 2) if total_gross > 0 else Decimal("0.00")
             profit_on_cost = round((total_profit / bd["product_cost"]) * 100, 2) if bd["product_cost"] > 0 else Decimal("0.00")
@@ -1550,7 +1733,8 @@ class ReturnLossView(APIView):
         import zoneinfo
         from datetime import datetime as dt_cls, time as dt_time, timedelta
         from decimal import Decimal, ROUND_HALF_UP
-        from core.models import ReturnClaim, ReturnClaimItem
+        from core.models import ReturnClaim, ReturnClaimItem, Order, CheTransaction
+        from core.services.return_costs import get_return_cargo_breakdown, order_has_return_activity
 
         try:
             org = request.user.profile.organization
@@ -1587,6 +1771,7 @@ class ReturnLossView(APIView):
         total_item_count = 0
         total_refund = Decimal("0")
         claim_rows = []
+        seen_order_numbers = set()
 
         for claim in claims_qs:
             items = list(claim.claim_items.all())
@@ -1598,9 +1783,19 @@ class ReturnLossView(APIView):
             barcode = ""
             customer_reason = ""
 
+            cargo_info = None
+            order = claim.order
+            if not order and claim.order_number:
+                order = Order.objects.filter(organization=org, order_number=claim.order_number).first()
+            if order:
+                cargo_info = get_return_cargo_breakdown(order)
+                claim_outgoing = cargo_info["outgoing_cargo"]
+                claim_incoming = cargo_info["incoming_cargo"]
+
             for ci in items:
-                claim_outgoing = max(claim_outgoing, ci.outgoing_cargo_cost)
-                claim_incoming = max(claim_incoming, ci.incoming_cargo_cost)
+                if cargo_info is None:
+                    claim_outgoing = max(claim_outgoing, ci.outgoing_cargo_cost)
+                    claim_incoming = max(claim_incoming, ci.incoming_cargo_cost)
                 claim_qty += ci.quantity
                 if not product_name:
                     product_name = ci.product_name
@@ -1645,6 +1840,74 @@ class ReturnLossView(APIView):
                 "total_cargo_loss": str(total_cargo_loss),
                 "cargo_provider": claim.cargo_provider,
                 "customer_reason": customer_reason or claim.reason,
+                "source": cargo_info["source"] if cargo_info else "claim",
+            })
+            if claim.order_number:
+                seen_order_numbers.add(str(claim.order_number))
+
+        che_return_numbers = set(
+            CheTransaction.objects.filter(
+                organization=org,
+                source=CheTransaction.SOURCE_SETTLEMENTS,
+                transaction_type_code="Return",
+                transaction_date__gte=min_date,
+                transaction_date__lte=max_date,
+            ).exclude(order_number__isnull=True).exclude(order_number="").values_list("order_number", flat=True)
+        )
+        status_return_numbers = set(
+            Order.objects.filter(
+                organization=org,
+                order_date__gte=min_date,
+                order_date__lte=max_date,
+                status__in=RETURN_STATUSES,
+            ).values_list("order_number", flat=True)
+        )
+
+        missing_numbers = (che_return_numbers | status_return_numbers) - seen_order_numbers
+        return_orders = Order.objects.filter(
+            organization=org,
+            order_number__in=missing_numbers,
+        ).prefetch_related("items__product_variant__product").order_by("-order_date")
+
+        for order in return_orders:
+            if not order_has_return_activity(order):
+                continue
+            cargo_info = get_return_cargo_breakdown(order)
+            items = list(order.items.all())
+            claim_qty = cargo_info["returned_quantity"] or max(sum(i.quantity for i in items), 1)
+            product_name = ""
+            barcode = ""
+            refund_amount = Decimal("0.00")
+            for item in items:
+                if not product_name and item.product_variant and item.product_variant.product:
+                    product_name = item.product_variant.product.title
+                    barcode = item.product_variant.barcode or ""
+                refund_amount += item.sale_price_net or item.sale_price_gross
+
+            total_cargo_loss = cargo_info["total_cargo_loss"]
+            order_date_str = order.order_date.astimezone(tz).strftime("%d.%m.%Y %H:%M") if order.order_date else ""
+
+            total_outgoing += cargo_info["outgoing_cargo"]
+            total_incoming += cargo_info["incoming_cargo"]
+            total_item_count += max(claim_qty, 1)
+            total_refund += refund_amount
+
+            claim_rows.append({
+                "claim_id": f"CHE-{order.order_number}",
+                "order_number": order.order_number,
+                "claim_date": order_date_str,
+                "order_date": order_date_str,
+                "claim_status": "Accepted" if order.status in RETURN_STATUSES else "Returned",
+                "product_name": product_name,
+                "barcode": barcode,
+                "quantity": claim_qty,
+                "refund_amount": str(refund_amount.quantize(Q2, ROUND_HALF_UP)),
+                "outgoing_cargo": str(cargo_info["outgoing_cargo"].quantize(Q2, ROUND_HALF_UP)),
+                "incoming_cargo": str(cargo_info["incoming_cargo"].quantize(Q2, ROUND_HALF_UP)),
+                "total_cargo_loss": str(total_cargo_loss),
+                "cargo_provider": order.cargo_provider_name,
+                "customer_reason": "CHE iade hareketi",
+                "source": cargo_info["source"],
             })
 
         total_cargo_loss_sum = (total_outgoing + total_incoming).quantize(Q2, ROUND_HALF_UP)
@@ -1828,7 +2091,7 @@ class AdsAnalysisView(APIView):
 class PayoutsView(APIView):
     """
     GET /api/reports/payouts/
-    Hakediş kontrol: PaymentOrder CHE işlemlerini döndürür.
+    Hakediş kontrol: CHE kayıtlarını paymentOrderId bazında gruplayarak döndürür.
     """
     permission_classes = [IsAuthenticated, IsSubscribed]
 
@@ -1849,11 +2112,7 @@ class PayoutsView(APIView):
         min_date_str = request.query_params.get("start_date") or request.query_params.get("min_date")
         max_date_str = request.query_params.get("end_date") or request.query_params.get("max_date")
 
-        qs = CheTransaction.objects.filter(
-            organization=org,
-            source=CheTransaction.SOURCE_OTHER,
-            transaction_type__icontains="Ödeme",
-        )
+        qs = CheTransaction.objects.filter(organization=org)
 
         if min_date_str and max_date_str:
             try:
@@ -1863,25 +2122,149 @@ class PayoutsView(APIView):
             except ValueError:
                 pass
 
-        payments = []
-        total_paid = Decimal("0")
-        for che in qs.order_by("-transaction_date"):
-            amount = che.debt if che.debt > 0 else che.credit
-            total_paid += amount
-            payments.append({
+        payment_rows = qs.exclude(payment_order_id__isnull=True).order_by("-transaction_date")
+        groups = {}
+
+        def group_key(che):
+            return str(che.payment_order_id or f"no-payment-{che.id}")
+
+        def signed_amount(che):
+            return (che.credit or Decimal("0")) - (che.debt or Decimal("0"))
+
+        for che in payment_rows:
+            key = group_key(che)
+            group = groups.setdefault(key, {
                 "payment_order_id": che.payment_order_id,
-                "payment_date":     format_date_tr(che.payment_date or che.transaction_date),
-                "amount":           float(amount.quantize(Q2, ROUND_HALF_UP)),
-                "description":      che.description or "",
-                "status":           "Ödendi",
+                "payment_date_raw": che.payment_date or che.transaction_date,
+                "amount": Decimal("0.00"),
+                "payment_amount": Decimal("0.00"),
+                "total_credit": Decimal("0.00"),
+                "total_debt": Decimal("0.00"),
+                "commission_total": Decimal("0.00"),
+                "deduction_total": Decimal("0.00"),
+                "withholding_total": Decimal("0.00"),
+                "platform_service_fee_total": Decimal("0.00"),
+                "order_numbers": set(),
+                "description": "",
+                "details": [],
+                "has_payment_order": False,
             })
+
+            if che.payment_date and (
+                not group["payment_date_raw"] or che.payment_date > group["payment_date_raw"]
+            ):
+                group["payment_date_raw"] = che.payment_date
+
+            tx_code = che.transaction_type_code or ""
+            tx_label = che.transaction_type or ""
+            tx_label_l = tx_label.lower()
+            is_payment_order = tx_code == "PaymentOrder" or "ödeme" in tx_label_l or "odeme" in tx_label_l
+            amount_signed = signed_amount(che)
+            debt = che.debt or Decimal("0")
+            credit = che.credit or Decimal("0")
+
+            group["total_credit"] += credit
+            group["total_debt"] += debt
+            if is_payment_order:
+                group["payment_amount"] += abs(debt if debt > 0 else credit)
+            else:
+                group["amount"] += amount_signed
+
+            if che.order_number:
+                group["order_numbers"].add(str(che.order_number))
+
+            if che.commission_amount:
+                group["commission_total"] += abs(che.commission_amount)
+
+            if che.source == CheTransaction.SOURCE_OTHER and tx_code != "PaymentOrder":
+                group["deduction_total"] += abs(debt if debt > 0 else credit)
+
+            if tx_code == "Stoppage":
+                group["withholding_total"] += abs(debt if debt > 0 else credit)
+
+            if che.transaction_sub_type == "PlatformServiceFee":
+                group["platform_service_fee_total"] += abs(debt if debt > 0 else credit)
+
+            if is_payment_order:
+                group["has_payment_order"] = True
+                if not group["description"]:
+                    group["description"] = che.description or ""
+
+            group["details"].append({
+                "date": format_date_tr(che.transaction_date),
+                "source": che.source,
+                "transaction_type": tx_code or tx_label,
+                "transaction_sub_type": che.transaction_sub_type or "",
+                "description": che.description or "",
+                "order_number": che.order_number or "",
+                "barcode": che.barcode or "",
+                "debt": float(debt.quantize(Q2, ROUND_HALF_UP)),
+                "credit": float(credit.quantize(Q2, ROUND_HALF_UP)),
+                "amount": float(amount_signed.quantize(Q2, ROUND_HALF_UP)),
+            })
+
+        payments = []
+        total_paid = Decimal("0.00")
+        total_pending = Decimal("0.00")
+        total_credit = Decimal("0.00")
+        total_debt = Decimal("0.00")
+        total_commission = Decimal("0.00")
+        total_deductions = Decimal("0.00")
+        total_withholding = Decimal("0.00")
+        total_platform_fee = Decimal("0.00")
+
+        for group in groups.values():
+            net_amount = group["amount"].quantize(Q2, ROUND_HALF_UP)
+            display_amount = (
+                group["payment_amount"].quantize(Q2, ROUND_HALF_UP)
+                if group["has_payment_order"]
+                else net_amount
+            )
+            total_credit += group["total_credit"]
+            total_debt += group["total_debt"]
+            total_commission += group["commission_total"]
+            total_deductions += group["deduction_total"]
+            total_withholding += group["withholding_total"]
+            total_platform_fee += group["platform_service_fee_total"]
+
+            if group["has_payment_order"]:
+                total_paid += display_amount
+                status_label = "Ödeme Emri"
+            else:
+                total_pending += abs(display_amount)
+                status_label = "Hakediş Oluştu"
+
+            payments.append({
+                "payment_order_id": group["payment_order_id"],
+                "payment_date": format_date_tr(group["payment_date_raw"]),
+                "amount": float(display_amount),
+                "net_amount": float(net_amount),
+                "total_credit": float(group["total_credit"].quantize(Q2, ROUND_HALF_UP)),
+                "total_debt": float(group["total_debt"].quantize(Q2, ROUND_HALF_UP)),
+                "commission_total": float(group["commission_total"].quantize(Q2, ROUND_HALF_UP)),
+                "deduction_total": float(group["deduction_total"].quantize(Q2, ROUND_HALF_UP)),
+                "withholding_total": float(group["withholding_total"].quantize(Q2, ROUND_HALF_UP)),
+                "platform_service_fee_total": float(group["platform_service_fee_total"].quantize(Q2, ROUND_HALF_UP)),
+                "order_count": len(group["order_numbers"]),
+                "description": group["description"],
+                "status": status_label,
+                "details": group["details"][:100],
+            })
+
+        payments.sort(key=lambda p: p["payment_date"], reverse=True)
 
         return Response({
             "data": {
                 "summary": {
-                    "total_paid":      float(total_paid.quantize(Q2, ROUND_HALF_UP)),
-                    "total_pending":   0.0,
-                    "payment_count":   len(payments),
+                    "total_paid": float(total_paid.quantize(Q2, ROUND_HALF_UP)),
+                    "total_pending": float(total_pending.quantize(Q2, ROUND_HALF_UP)),
+                    "payment_count": len(payments),
+                    "total_credit": float(total_credit.quantize(Q2, ROUND_HALF_UP)),
+                    "total_debt": float(total_debt.quantize(Q2, ROUND_HALF_UP)),
+                    "total_commission": float(total_commission.quantize(Q2, ROUND_HALF_UP)),
+                    "total_deductions": float(total_deductions.quantize(Q2, ROUND_HALF_UP)),
+                    "total_withholding": float(total_withholding.quantize(Q2, ROUND_HALF_UP)),
+                    "platform_service_fee_total": float(total_platform_fee.quantize(Q2, ROUND_HALF_UP)),
                 },
                 "payments": payments,
             }
@@ -1906,25 +2289,41 @@ class ProductExcelExportView(APIView):
     permission_classes = [IsAuthenticated, IsSubscribed]
 
     def get(self, request):
+        import datetime
         from core.models import UserProfile, Product, OrderItem
+        from django.db.models import Q
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
         org = profile.organization
 
-        # Default: yalnızca SATIŞI olan + AKTİF ürünleri export et
-        # (Trendyol kataloğunda binlerce satılmamış ürün varsa Excel anlamsız
-        # büyür — cost warning ile aynı semantik).  ?all=true ile tüm aktif
-        # katalog geri yüklenebilir (geri uyumluluk: toplu maliyet yükleme
-        # iş akışı için).
-        base_qs = Product.objects.filter(organization=org, is_active=True)
-        include_all = request.query_params.get("all", "false").lower() in ("true", "1", "yes")
-        if not include_all:
-            sold_pids_qs = OrderItem.objects.filter(
-                order__organization=org,
-                product_variant__isnull=False,
-            ).values_list("product_variant__product_id", flat=True).distinct()
-            base_qs = base_qs.filter(id__in=sold_pids_qs)
+        recent_since = timezone.now() - datetime.timedelta(days=60)
+        recent_variant_barcodes = set(OrderItem.objects.filter(
+            order__organization=org,
+            order__order_date__gte=recent_since,
+            product_variant__isnull=False,
+        ).exclude(
+            product_variant__barcode=""
+        ).values_list("product_variant__barcode", flat=True))
+        recent_skus = set(OrderItem.objects.filter(
+            order__organization=org,
+            order__order_date__gte=recent_since,
+        ).exclude(
+            sku=""
+        ).values_list("sku", flat=True))
+        recent_codes = recent_variant_barcodes | recent_skus
 
-        products = base_qs.prefetch_related('variants').order_by(
+        products = Product.objects.filter(
+            organization=org,
+            is_active=True,
+        ).filter(
+            Q(current_stock__gt=0) |
+            Q(variants__stock__gt=0) |
+            Q(barcode__in=recent_variant_barcodes) |
+            Q(variants__barcode__in=recent_variant_barcodes) |
+            Q(barcode__in=recent_skus) |
+            Q(variants__barcode__in=recent_skus) |
+            Q(marketplace_sku__in=recent_skus) |
+            Q(variants__marketplace_sku__in=recent_skus)
+        ).distinct().prefetch_related('variants').order_by(
             django_models.F('trendyol_created_at').desc(nulls_last=True)
         )
 
@@ -1962,6 +2361,16 @@ class ProductExcelExportView(APIView):
         row_num = 2
         for product in products:
             for variant in product.variants.all():
+                variant_is_actionable = (
+                    (variant.stock or 0) > 0 or
+                    (variant.barcode and variant.barcode in recent_codes) or
+                    (variant.marketplace_sku and variant.marketplace_sku in recent_codes) or
+                    (product.barcode and product.barcode in recent_codes) or
+                    (product.marketplace_sku and product.marketplace_sku in recent_codes)
+                )
+                if not variant_is_actionable:
+                    continue
+
                 desi_val = float(variant.desi) if variant.desi is not None else float(product.desi if product.desi else 1)
                 # Maliyet KDV Oranı: Kullanıcı girdiyse onu göster, yoksa Trendyol satış KDV'sini default al
                 cost_vat = float(variant.cost_vat_rate) if variant.cost_vat_rate else float(product.vat_rate)
@@ -2502,16 +2911,18 @@ class ProductProfitabilityView(APIView):
         # Satış sayılan: sadece Delivered + Shipped
         # Created/Picking/UnDelivered satış değil; Cancelled/UnSupplied kargo zararı yok
         SOLD_STATUSES     = set(SALE_STATUSES)
-        RETURNED_STATUSES = set(RETURN_STATUSES + CANCEL_STATUSES)
+        from core.services.return_costs import (
+            is_order_item_returned, order_has_return_activity, get_return_cargo_breakdown
+        )
 
         # barcode → aggregated data
         agg_map: dict = {}
 
         for order in orders_qs:
             is_sold     = order.status in SOLD_STATUSES
-            is_returned = order.status in RETURNED_STATUSES
+            has_return  = order_has_return_activity(order)
 
-            if not is_sold and not is_returned:
+            if not is_sold and not has_return:
                 continue  # Shipped/Picking/Created: ne satış ne iade sayılır
 
             for item in order.items.all():
@@ -2549,15 +2960,15 @@ class ProductProfitabilityView(APIView):
                 except Exception:
                     continue
 
-                bd       = profit_info.get("breakdown", {})
-                shipping = bd.get(FinancialTransactionType.SHIPPING_FEE.value, Decimal("0.00"))
+                bd = profit_info.get("breakdown", {})
+                item_returned = is_order_item_returned(item)
                 cost     = bd.get(FinancialTransactionType.PRODUCT_COST.value, Decimal("0.00"))
 
-                if is_returned:
+                if item_returned:
                     # İade sipariş: kargo kaybını iade_kargo_zarari'ne ekle
-                    agg_map[barcode]["return_cargo_loss"] += shipping
+                    agg_map[barcode]["return_cargo_loss"] += get_return_cargo_breakdown(order, item=item)["total_cargo_loss"]
                     agg_map[barcode]["return_count"]      += item.quantity
-                else:
+                elif is_sold:
                     # Delivered sipariş: satış adedi, tutar ve kâra ekle
                     agg_map[barcode]["total_sales"]  += profit_info["gross_revenue"]
                     agg_map[barcode]["total_profit"] += profit_info["net_profit"]
@@ -2680,7 +3091,9 @@ class ProductAnalysisView(APIView):
 
         # Satış sayılan: sadece Delivered + Shipped
         SOLD_STATUSES     = set(SALE_STATUSES)
-        RETURNED_STATUSES = set(RETURN_STATUSES + CANCEL_STATUSES)
+        from core.services.return_costs import (
+            is_order_item_returned, order_has_return_activity, get_return_cargo_breakdown
+        )
 
         orders_qs = Order.objects.filter(
             organization=org,
@@ -2695,8 +3108,8 @@ class ProductAnalysisView(APIView):
 
         for order in orders_qs:
             is_sold     = order.status in SOLD_STATUSES
-            is_returned = order.status in RETURNED_STATUSES
-            if not is_sold and not is_returned:
+            has_return  = order_has_return_activity(order)
+            if not is_sold and not has_return:
                 continue
 
             order_date_str = order.order_date.replace(tzinfo=None).strftime("%Y-%m-%d")
@@ -2737,10 +3150,9 @@ class ProductAnalysisView(APIView):
 
                 bd = calc.get("breakdown", {})
 
-                if is_returned:
-                    cargo_loss = bd.get(FinancialTransactionType.SHIPPING_FEE.value, Decimal("0"))
-                    product_agg[pk]["return_cargo_loss"] += cargo_loss
-                else:
+                if is_order_item_returned(item):
+                    product_agg[pk]["return_cargo_loss"] += get_return_cargo_breakdown(order, item=item)["total_cargo_loss"]
+                elif is_sold:
                     product_agg[pk]["total_sold_quantity"] += item.quantity
                     product_agg[pk]["revenue"]     += calc["gross_revenue"]
                     product_agg[pk]["net_profit"]  += calc["net_profit"]
@@ -2878,22 +3290,14 @@ class ProductProfitabilityExcelExportView(APIView):
             organization=org,
             order_date__gte=min_date,
             order_date__lte=max_date,
-        ).exclude(
-            status__in=["Cancelled", "Returned", "UnSupplied"]
         ).prefetch_related(
             'items__product_variant__product',
             'items__transactions'
         ).select_related('marketplace_account').order_by('order_date')
 
-        returned_qs = Order.objects.filter(
-            organization=org,
-            order_date__gte=min_date,
-            order_date__lte=max_date,
-            status="Returned",
-        ).prefetch_related(
-            'items__product_variant__product',
-            'items__transactions'
-        ).select_related('marketplace_account')
+        from core.services.return_costs import (
+            is_order_item_returned, order_has_return_activity, get_return_cargo_breakdown
+        )
 
         product_agg = defaultdict(lambda: {
             "barcode": "",
@@ -2909,37 +3313,39 @@ class ProductProfitabilityExcelExportView(APIView):
         })
 
         for order in orders_qs:
-            calc = ProfitCalculator.calculate_for_order(order)
-            fi = order.items.first()
-            if not fi or not fi.product_variant or not fi.product_variant.product:
+            is_sold = order.status in SALE_STATUSES
+            has_return = order_has_return_activity(order)
+            if not is_sold and not has_return:
                 continue
 
-            p = fi.product_variant.product
-            v = fi.product_variant
-            pk = p.barcode or p.marketplace_sku or p.title
+            for item in order.items.all():
+                if not item.product_variant or not item.product_variant.product:
+                    continue
+                p = item.product_variant.product
+                v = item.product_variant
+                pk = p.barcode or p.marketplace_sku or p.title
 
-            agg = product_agg[pk]
-            if not agg["barcode"]:
-                agg["barcode"] = pk
-                agg["title"] = p.title
-                agg["model_code"] = v.marketplace_sku or p.marketplace_sku or ""
-                agg["category"] = p.category_name
-                agg["stock"] = p.current_stock
+                agg = product_agg[pk]
+                if not agg["barcode"]:
+                    agg["barcode"] = pk
+                    agg["title"] = p.title
+                    agg["model_code"] = v.marketplace_sku or p.marketplace_sku or ""
+                    agg["category"] = p.category_name
+                    agg["stock"] = p.current_stock
 
-            agg["total_sold_quantity"] += 1
-            agg["revenue"] += calc["total_sale"]
-            agg["net_profit"] += calc["net_profit"]
-            agg["cost"] += calc["product_cost"] + calc.get("extra_product_cost", Decimal("0"))
+                if is_order_item_returned(item):
+                    agg["return_cargo_loss"] += get_return_cargo_breakdown(order, item=item)["total_cargo_loss"]
+                    continue
 
-        for order in returned_qs:
-            fi = order.items.first()
-            if not fi or not fi.product_variant or not fi.product_variant.product:
-                continue
-            p = fi.product_variant.product
-            pk = p.barcode or p.marketplace_sku or p.title
-            if pk in product_agg:
-                calc = ProfitCalculator.calculate_for_order(order)
-                product_agg[pk]["return_cargo_loss"] += calc.get("cargo", Decimal("0"))
+                if not is_sold:
+                    continue
+
+                calc = ProfitCalculator.calculate_for_order_item(item)
+                bd = calc.get("breakdown", {})
+                agg["total_sold_quantity"] += item.quantity
+                agg["revenue"] += calc["gross_revenue"]
+                agg["net_profit"] += calc["net_profit"]
+                agg["cost"] += bd.get(FinancialTransactionType.PRODUCT_COST.value, Decimal("0")) + calc.get("extra_product_cost", Decimal("0"))
 
         wb = openpyxl.Workbook()
         ws = wb.active

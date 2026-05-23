@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Fragment, useState, useEffect } from "react";
 import { formatCurrency } from "@/lib/utils/format";
 import apiClient from "@/lib/api/client";
-import { CreditCard, CheckCircle, Clock, RefreshCw } from "lucide-react";
+import { CreditCard, CheckCircle, Clock, RefreshCw, ReceiptText, ChevronDown } from "lucide-react";
 import { DatePickerWithRange } from "@/components/dashboard/DateRangePicker";
 import { DateRange } from "react-day-picker";
 import { format, subDays } from "date-fns";
@@ -12,14 +12,42 @@ interface PayoutSummary {
   total_paid: number;
   total_pending: number;
   payment_count: number;
+  total_credit: number;
+  total_debt: number;
+  total_commission: number;
+  total_deductions: number;
+  total_withholding: number;
+  platform_service_fee_total: number;
+}
+
+interface PaymentDetail {
+  date: string;
+  source: string;
+  transaction_type: string;
+  transaction_sub_type: string;
+  description: string;
+  order_number: string;
+  barcode: string;
+  debt: number;
+  credit: number;
+  amount: number;
 }
 
 interface Payment {
   payment_order_id: number | null;
   payment_date: string;
   amount: number;
+  net_amount: number;
+  total_credit: number;
+  total_debt: number;
+  commission_total: number;
+  deduction_total: number;
+  withholding_total: number;
+  platform_service_fee_total: number;
+  order_count: number;
   description: string;
   status: string;
+  details: PaymentDetail[];
 }
 
 interface PayoutsData {
@@ -30,6 +58,7 @@ interface PayoutsData {
 export default function PayoutsPage() {
   const [data, setData] = useState<PayoutsData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState<number | null>(null);
 
   const [date, setDate] = useState<DateRange | undefined>({
     from: subDays(new Date(), 30),
@@ -97,7 +126,7 @@ export default function PayoutsPage() {
       ) : (
         <>
           {/* Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-4 mb-6">
             <div className="bg-gradient-to-br from-green-500/10 to-green-600/5 border border-green-500/10 rounded-xl p-5">
               <div className="flex items-center gap-2 mb-2">
                 <CheckCircle className="w-4 h-4 text-green-400" />
@@ -108,7 +137,7 @@ export default function PayoutsPage() {
             <div className="bg-gradient-to-br from-yellow-500/10 to-yellow-600/5 border border-yellow-500/10 rounded-xl p-5">
               <div className="flex items-center gap-2 mb-2">
                 <Clock className="w-4 h-4 text-yellow-400" />
-                <p className="text-xs text-white/50 font-medium">Bekleyen</p>
+                <p className="text-xs text-white/50 font-medium">Oluşan Hakediş</p>
               </div>
               <p className="text-2xl font-bold text-yellow-400">{formatCurrency(s.total_pending)}</p>
             </div>
@@ -118,6 +147,27 @@ export default function PayoutsPage() {
                 <p className="text-xs text-white/50 font-medium">Ödeme Sayısı</p>
               </div>
               <p className="text-2xl font-bold text-blue-400">{s.payment_count}</p>
+            </div>
+            <div className="bg-navy-900 border border-white/10 rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-2">
+                <ReceiptText className="w-4 h-4 text-white/50" />
+                <p className="text-xs text-white/50 font-medium">Toplam Alacak</p>
+              </div>
+              <p className="text-xl font-bold text-white">{formatCurrency(s.total_credit || 0)}</p>
+            </div>
+            <div className="bg-navy-900 border border-white/10 rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-2">
+                <ReceiptText className="w-4 h-4 text-white/50" />
+                <p className="text-xs text-white/50 font-medium">Kesintiler</p>
+              </div>
+              <p className="text-xl font-bold text-rose-300">{formatCurrency(s.total_debt || 0)}</p>
+            </div>
+            <div className="bg-navy-900 border border-white/10 rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-2">
+                <ReceiptText className="w-4 h-4 text-white/50" />
+                <p className="text-xs text-white/50 font-medium">Komisyon</p>
+              </div>
+              <p className="text-xl font-bold text-orange-300">{formatCurrency(s.total_commission || 0)}</p>
             </div>
           </div>
 
@@ -131,7 +181,10 @@ export default function PayoutsPage() {
                 <tr>
                   <th className="px-4 py-3">Ödeme Emri ID</th>
                   <th className="px-4 py-3">Tarih</th>
-                  <th className="px-4 py-3">Açıklama</th>
+                  <th className="px-4 py-3 text-right">Alacak</th>
+                  <th className="px-4 py-3 text-right">Borç</th>
+                  <th className="px-4 py-3 text-right">Komisyon</th>
+                  <th className="px-4 py-3 text-right">Sipariş</th>
                   <th className="px-4 py-3">Durum</th>
                   <th className="px-4 py-3 text-right">Tutar</th>
                 </tr>
@@ -139,7 +192,7 @@ export default function PayoutsPage() {
               <tbody className="divide-y divide-white/5">
                 {!data?.payments || data.payments.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-4 py-8 text-center text-white/40">
+                    <td colSpan={8} className="px-4 py-8 text-center text-white/40">
                       Hakediş kaydı bulunamadı.{" "}
                       <span className="text-white/25 text-xs">
                         (Finansal senkronizasyon tamamlandığında veriler görünecek.)
@@ -148,21 +201,68 @@ export default function PayoutsPage() {
                   </tr>
                 ) : (
                   data.payments.map((p, i) => (
-                    <tr key={i} className="hover:bg-white/5 transition-colors">
-                      <td className="px-4 py-3 whitespace-nowrap text-white/60 font-mono text-xs">
-                        {p.payment_order_id || "-"}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-white/70">{p.payment_date}</td>
-                      <td className="px-4 py-3 text-white/50 truncate max-w-[220px] text-xs">{p.description || "-"}</td>
-                      <td className="px-4 py-3">
-                        <span className="px-2 py-0.5 rounded text-[11px] font-medium text-green-400 bg-green-400/10">
-                          {p.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-right font-semibold text-green-400">
-                        {formatCurrency(p.amount)}
-                      </td>
-                    </tr>
+                    <Fragment key={p.payment_order_id || i}>
+                      <tr key={`row-${i}`} className="hover:bg-white/5 transition-colors">
+                        <td className="px-4 py-3 whitespace-nowrap text-white/70 font-mono text-xs">
+                          <button
+                            onClick={() => setExpanded(expanded === i ? null : i)}
+                            className="inline-flex items-center gap-2 hover:text-white"
+                          >
+                            <ChevronDown className={`w-3 h-3 transition-transform ${expanded === i ? "rotate-180" : ""}`} />
+                            {p.payment_order_id || "-"}
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap text-white/70">{p.payment_date}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-right text-emerald-300">{formatCurrency(p.total_credit || 0)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-right text-rose-300">{formatCurrency(p.total_debt || 0)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-right text-orange-300">{formatCurrency(p.commission_total || 0)}</td>
+                        <td className="px-4 py-3 whitespace-nowrap text-right text-white/70">{p.order_count}</td>
+                        <td className="px-4 py-3">
+                          <span className="px-2 py-0.5 rounded text-[11px] font-medium text-green-400 bg-green-400/10">
+                            {p.status}
+                          </span>
+                        </td>
+                        <td className={`px-4 py-3 whitespace-nowrap text-right font-semibold ${p.amount >= 0 ? "text-green-400" : "text-rose-400"}`}>
+                          {formatCurrency(p.amount)}
+                        </td>
+                      </tr>
+                      {expanded === i && (
+                        <tr key={`detail-${i}`} className="bg-black/15">
+                          <td colSpan={8} className="px-4 py-4">
+                            <div className="overflow-x-auto rounded-lg border border-white/10">
+                              <table className="w-full text-[12px]">
+                                <thead className="bg-white/5 text-white/50">
+                                  <tr>
+                                    <th className="px-3 py-2 text-left">Tarih</th>
+                                    <th className="px-3 py-2 text-left">Tip</th>
+                                    <th className="px-3 py-2 text-left">Sipariş</th>
+                                    <th className="px-3 py-2 text-left">Barkod</th>
+                                    <th className="px-3 py-2 text-right">Borç</th>
+                                    <th className="px-3 py-2 text-right">Alacak</th>
+                                    <th className="px-3 py-2 text-right">Net</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-white/5">
+                                  {(p.details || []).map((d, di) => (
+                                    <tr key={di}>
+                                      <td className="px-3 py-2 whitespace-nowrap text-white/60">{d.date}</td>
+                                      <td className="px-3 py-2 text-white/70">{d.transaction_sub_type || d.transaction_type}</td>
+                                      <td className="px-3 py-2 whitespace-nowrap text-white/50">{d.order_number || "-"}</td>
+                                      <td className="px-3 py-2 whitespace-nowrap text-white/50">{d.barcode || "-"}</td>
+                                      <td className="px-3 py-2 text-right text-rose-300">{formatCurrency(d.debt || 0)}</td>
+                                      <td className="px-3 py-2 text-right text-emerald-300">{formatCurrency(d.credit || 0)}</td>
+                                      <td className={`px-3 py-2 text-right ${d.amount >= 0 ? "text-green-400" : "text-rose-400"}`}>
+                                        {formatCurrency(d.amount || 0)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   ))
                 )}
               </tbody>

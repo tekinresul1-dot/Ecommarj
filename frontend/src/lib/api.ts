@@ -129,6 +129,7 @@ export const api = {
 
         let res = await fetch(`${API_BASE}${cleanEndpoint}`, {
             headers: getHeaders(cleanEndpoint),
+            cache: "no-store",
         });
 
         // 401 → token yenilemeyi dene, sonra tekrar iste
@@ -137,6 +138,7 @@ export const api = {
             if (newToken) {
                 res = await fetch(`${API_BASE}${cleanEndpoint}`, {
                     headers: { "Content-Type": "application/json", Authorization: `Bearer ${newToken}` },
+                    cache: "no-store",
                 });
             } else {
                 handleSessionExpired();

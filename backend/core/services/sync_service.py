@@ -7,6 +7,7 @@ from core.models import (
     Organization, MarketplaceAccount, Product, Order, OrderItem,
     FinancialTransaction, FinancialTransactionType, ProductVariant, CargoInvoice
 )
+from core.services.order_amounts import parse_order_line_amounts
 from core.services.trendyol_adapter import TrendyolAdapter
 from core.utils.encryption import decrypt_value
 
@@ -218,6 +219,12 @@ class TrendyolSyncService:
             
             # micro export flag
             is_micro = o_data.get("micro", False)
+            is_fast_delivery = bool(o_data.get("fastDelivery")) or any(
+                opt.get("type") in {"FastDelivery", "TodayDelivery", "SameDayShipping"}
+                for line in o_data.get("lines", [])
+                for opt in (line.get("fastDeliveryOptions") or [])
+                if isinstance(opt, dict)
+            )
             
             # Cargo details
             cargo_provider = o_data.get("cargoProviderName", "")
@@ -264,6 +271,7 @@ class TrendyolSyncService:
                     "cargo_provider_name": cargo_provider,
                     "cargo_tracking_number": cargo_tracking,
                     "cargo_deci": cargo_deci,
+                    "fast_delivery": is_fast_delivery,
                 }
             )
 
@@ -280,8 +288,7 @@ class TrendyolSyncService:
                         barcode=barcode
                     ).select_related("product").first()
                 
-                price = Decimal(str(line.get("amount", line.get("price", "0"))))
-                discount = Decimal(str(line.get("discount", "0")))
+                amounts = parse_order_line_amounts(line)
                 quantity = int(line.get("quantity", 1))
                 commission_rate_raw = line.get("commission")  # Trendyol API: 'commission' alanı (oran %)
                 vat_rate_raw = line.get("vatRate")
@@ -292,9 +299,9 @@ class TrendyolSyncService:
                     "product_variant": variant,
                     "sku": line.get("merchantSku", barcode),
                     "quantity": quantity,
-                    "sale_price_gross": price,
-                    "sale_price_net": price - discount,
-                    "discount": discount,
+                    "sale_price_gross": amounts["gross"],
+                    "sale_price_net": amounts["net"],
+                    "discount": amounts["discount"],
                     "status": item_status,
                 }
                 if commission_rate_raw is not None:

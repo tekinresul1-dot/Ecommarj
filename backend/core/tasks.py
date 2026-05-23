@@ -10,12 +10,30 @@ Tasks:
 - sync_all_trendyol_data_task — legacy support (products + orders + settlements)
 """
 import logging
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from celery import shared_task
 
 from core.models import MarketplaceAccount
 
 logger = logging.getLogger(__name__)
+ISTANBUL_TZ = ZoneInfo("Europe/Istanbul")
+
+
+def _parse_sync_boundary(value: str, *, is_end: bool):
+    if len(value) == 10:
+        hour, minute, second, microsecond = (23, 59, 59, 999999) if is_end else (0, 0, 0, 0)
+        return datetime.fromisoformat(value).replace(
+            hour=hour,
+            minute=minute,
+            second=second,
+            microsecond=microsecond,
+            tzinfo=ISTANBUL_TZ,
+        )
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ISTANBUL_TZ)
+    return parsed
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
@@ -57,8 +75,8 @@ def trendyol_backfill_sync(self, account_id: int, start_date_iso: str, end_date_
     """Backfill sync for a specific date range."""
     try:
         account = MarketplaceAccount.objects.get(id=account_id, is_active=True)
-        start_date = datetime.fromisoformat(start_date_iso).replace(tzinfo=dt_timezone.utc)
-        end_date = datetime.fromisoformat(end_date_iso).replace(tzinfo=dt_timezone.utc)
+        start_date = _parse_sync_boundary(start_date_iso, is_end=False)
+        end_date = _parse_sync_boundary(end_date_iso, is_end=True)
         
         from core.services.order_sync import TrendyolOrderSyncService
         service = TrendyolOrderSyncService(account)
@@ -209,7 +227,7 @@ def trendyol_ad_expense_sync_all_accounts():
 
 
 @shared_task
-def sync_financial_transactions_task():
+def sync_financial_transactions_task(days_back: int = 15):
     """CHE (Cari Hesap Ekstresi) finansal işlemlerini tüm aktif hesaplar için senkronize eder."""
     from core.models import MarketplaceAccount
     from core.services.financial_sync import sync_financials_for_account
@@ -217,7 +235,7 @@ def sync_financial_transactions_task():
     results = []
     for account in accounts:
         try:
-            result = sync_financials_for_account(account, days_back=15)
+            result = sync_financials_for_account(account, days_back=days_back)
             results.append(f"{account.seller_id}: inserted={result['inserted']} updated={result['updated']}")
         except Exception as e:
             logger.error(f"[FinancialSync] Failed for {account.seller_id}: {e}")
@@ -245,7 +263,12 @@ def sync_all_trendyol_data_task(account_id: str):
         order_service = TrendyolOrderSyncService(account)
         audit = order_service.incremental_sync()
         
-        # Settlements — still use old sync service
+        # CHE financials — first account sync gets 180 days, routine/manual syncs refresh 15 days
+        from core.services.financial_sync import sync_financials_for_account
+        che_days = 180 if not account.last_sync_at else 15
+        sync_financials_for_account(account, days_back=che_days)
+
+        # Legacy settlements are kept as a non-critical fallback for FinancialTransaction rows
         legacy_service.sync_settlements()
         
         # Cargo Invoices — New addition

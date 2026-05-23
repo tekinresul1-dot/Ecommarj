@@ -46,6 +46,7 @@ const STATUS_STYLES: Record<string, string> = {
   WaitingInAction: "bg-yellow-500/15 text-yellow-400 border border-yellow-500/20",
   Unresolved: "bg-orange-500/15 text-orange-400 border border-orange-500/20",
   InProgress: "bg-blue-500/15 text-blue-400 border border-blue-500/20",
+  Returned: "bg-red-500/15 text-red-400 border border-red-500/20",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -53,6 +54,7 @@ const STATUS_LABELS: Record<string, string> = {
   WaitingInAction: "Aksiyon Bekliyor",
   Unresolved: "Çözümsüz",
   InProgress: "İşlemde",
+  Returned: "CHE İade",
 };
 
 export default function ReturnAnalysisPage() {

@@ -81,6 +81,8 @@ FALLBACK_CARGO_RATES_KDV_DAHIL = {
     "Kargom":           Decimal("90.00"),
 }
 
+DEFAULT_EXTRA_PRODUCT_COST_RATE = Decimal("3.00")
+
 
 _CARRIER_FLAT_RATE_CACHE: dict | None = None
 
@@ -159,6 +161,7 @@ class ProfitCalculator:
         is_micro_export: bool = False,
         sale_price_net: Decimal = None,
         is_returned: bool = False,
+        commission_amount: Decimal = None,
     ) -> Dict[str, Any]:
         """
         Ham verilerden (Satış, Kargo, Komisyon, KDV oranları) net kârlılığı Excel mantığıyla hesaplar.
@@ -184,8 +187,12 @@ class ProfitCalculator:
             
         alis_kdv = q((product_cost / sale_kdv_factor) * (vat_rate / Decimal("100")))
 
-        # 2. Komisyon Hesabı (Komisyon, indirimli satış tutarı üzerinden hesaplanır)
-        commission_cost = q(active_sale_price * (commission_rate / Decimal("100")))
+        # 2. Komisyon Hesabı — CHE gerçek komisyon tutarı varsa onu kullanır,
+        # yoksa indirimli satış tutarı üzerinden oranla tahmin eder.
+        if commission_amount is not None and commission_amount > Decimal("0.00"):
+            commission_cost = q(abs(commission_amount))
+        else:
+            commission_cost = q(active_sale_price * (commission_rate / Decimal("100")))
         komisyon_kdv = q(commission_cost * Decimal("20") / Decimal("120"))
 
         # 3. Kargo Hesabı
@@ -209,7 +216,10 @@ class ProfitCalculator:
         hizmet_bedeli_kdv = q(((service_fee + intl_service_fee) / Decimal("1.20")) * Decimal("0.20"))
 
         # 6. Ödenmesi Gereken Net KDV
-        net_kdv = q(satis_kdv - (alis_kdv + komisyon_kdv + kargo_kdv + hizmet_bedeli_kdv))
+        # Sipariş bazlı ekranda devreden KDV'yi kâra artı yazmayız; ödenecek KDV
+        # negatifse maliyet etkisi sıfır kabul edilir.
+        raw_net_kdv = q(satis_kdv - (alis_kdv + komisyon_kdv + kargo_kdv + hizmet_bedeli_kdv))
+        net_kdv = max(raw_net_kdv, Decimal("0.00"))
 
         # 7. Stopaj
         stopaj = q((active_sale_price / sale_kdv_factor) * Decimal("0.01"))
@@ -270,6 +280,7 @@ class ProfitCalculator:
         product_cost = Decimal("0.00")
         cargo_cost = Decimal("0.00")
         commission_rate = Decimal("0.00")
+        commission_amount = None
         vat_rate = Decimal("10.00")  # Varsayılan %10, ürün bazlı override edilir
         extra_product_cost = Decimal("0.00")
         
@@ -280,32 +291,14 @@ class ProfitCalculator:
             elif tx.transaction_type == FinancialTransactionType.SHIPPING_FEE.value:
                 cargo_cost = abs(tx.amount)
                 
-        # Komisyon: CHE Sale transaction'ından gerçek değeri kullan (varsa)
+        # Komisyon: CHE Sale transaction'ından gerçek tutarı/oranı kullan (varsa)
         order_num = order_item.order.order_number or order_item.order.marketplace_order_id or ""
         barcode = order_item.sku or ""
         try:
-            from core.models import CheTransaction
-            order = order_item.order
-            # Per-order memo: önceden HER sipariş kalemi için ayrı bir
-            # CheTransaction sorgusu çalışıyordu (N+1). Bir siparişin tüm
-            # settlement kayıtlarını sipariş örneğine (request-scoped) bir kez
-            # yükleyip kalemler arasında paylaşıyoruz.
-            che_list = getattr(order, "_che_settlements_memo", None)
-            if che_list is None:
-                che_list = list(
-                    CheTransaction.objects.filter(
-                        account=order.marketplace_account,
-                        source=CheTransaction.SOURCE_SETTLEMENTS,
-                        order_number=order_num,
-                    )
-                )
-                order._che_settlements_memo = che_list
-
-            che_sale = None
-            if barcode:
-                che_sale = next((t for t in che_list if t.barcode == barcode), None)
-            elif che_list:
-                che_sale = che_list[0]
+            from core.services.che_finance import find_sale_transaction_for_item
+            che_sale = find_sale_transaction_for_item(order_item)
+            if che_sale and che_sale.commission_amount and che_sale.commission_amount > Decimal("0"):
+                commission_amount = che_sale.commission_amount
             if che_sale and che_sale.commission_rate and che_sale.commission_rate > Decimal("0"):
                 commission_rate = che_sale.commission_rate
         except Exception as e:
@@ -340,6 +333,8 @@ class ProfitCalculator:
             if product_cost > Decimal("0.00"):
                 extra_rate = getattr(variant, 'extra_cost_rate', Decimal("0.00")) or Decimal("0.00")
                 extra_amount = getattr(variant, 'extra_cost_amount', Decimal("0.00")) or Decimal("0.00")
+                if extra_rate == Decimal("0.00") and extra_amount == Decimal("0.00"):
+                    extra_rate = DEFAULT_EXTRA_PRODUCT_COST_RATE
                 extra_product_cost = (product_cost * (extra_rate / Decimal("100"))).quantize(Decimal("0.01")) + extra_amount
                 product_cost += extra_product_cost
             
@@ -361,7 +356,7 @@ class ProfitCalculator:
                 barem_applied = False
                 if active_desi is not None and active_desi <= Decimal("10.00"):
                     # Table seçimi
-                    target_table = "table1" if product.fast_delivery else "table2"
+                    target_table = "table1" if (order_item.order.fast_delivery or product.fast_delivery) else "table2"
 
                     # Fiyat aralığı: 350+ için 200_349 oranı tahmini kullanılır
                     price_range = "0_199" if sale_price_gross < Decimal("200.00") else "200_349"
@@ -411,8 +406,10 @@ class ProfitCalculator:
             vat_rate=vat_rate,
             is_micro_export=is_micro_export,
             sale_price_net=sale_price_net,
-            is_returned=is_returned
+            is_returned=is_returned,
+            commission_amount=commission_amount,
         )
+        result["che_commission_verified"] = commission_amount is not None and commission_amount > Decimal("0.00")
         result["extra_product_cost"] = extra_product_cost
         return result
 
@@ -442,9 +439,19 @@ class ProfitCalculator:
 
         # Collect order-level context while iterating items
         total_desi   = Decimal("0")
-        fast_delivery = False
+        fast_delivery = bool(getattr(order, "fast_delivery", False))
+        sold_item_count = 0
+
+        try:
+            from core.services.return_costs import is_order_item_returned, get_return_cargo_breakdown
+        except Exception:
+            is_order_item_returned = lambda _item: False
+            get_return_cargo_breakdown = None
 
         for item in items:
+            if is_order_item_returned(item):
+                continue
+
             r  = ProfitCalculator.calculate_for_order_item(item)
             bd = r["breakdown"]
             kd = r.get("kdv_detail", {})
@@ -457,6 +464,7 @@ class ProfitCalculator:
             sum_satis_kdv    += kd.get("satis_kdv", Decimal("0"))
             sum_alis_kdv     += kd.get("alis_kdv", Decimal("0"))
             sum_komisyon_kdv += kd.get("komisyon_kdv", Decimal("0"))
+            sold_item_count += 1
 
             if item.product_variant:
                 desi = item.product_variant.desi
@@ -469,6 +477,17 @@ class ProfitCalculator:
 
         # ── Step 2: Sipariş bazlı kargo (TEK değer) ──
         cargo_source = "estimated"
+        return_cargo_info = (
+            get_return_cargo_breakdown(order)
+            if get_return_cargo_breakdown
+            else {
+                "outgoing_cargo": Decimal("0.00"),
+                "incoming_cargo": Decimal("0.00"),
+                "total_cargo_loss": Decimal("0.00"),
+                "source": "none",
+            }
+        )
+        return_cargo_loss = return_cargo_info["total_cargo_loss"]
 
         # Öncelik 1: CargoInvoice (Trendyol Kargo Faturası API'sinden gerçek tutar)
         from django.db.models import Sum as DjSum
@@ -508,10 +527,25 @@ class ProfitCalculator:
                         raw_carrier = first.product_variant.product.default_carrier or ""
                 carrier = _normalize_carrier(raw_carrier)
 
-                # Gerçek fatura flat tarife — barem/CargoPricing bu seller için geçerli değil.
-                # CarrierFlatRate DB'den okur; kayıt yoksa FALLBACK dict'e düşer.
-                order_cargo  = _get_carrier_flat_rate(carrier)
-                cargo_source = "estimated"
+                barem_applied = False
+                if total_desi > Decimal("0.00") and total_desi <= Decimal("10.00"):
+                    target_table = "table1" if fast_delivery else "table2"
+                    price_range = "0_199" if total_sale < Decimal("200.00") else "200_349"
+                    if carrier in TRENDYOL_BAREM_RATES.get(target_table, {}).get(price_range, {}):
+                        order_cargo = q(TRENDYOL_BAREM_RATES[target_table][price_range][carrier] * Decimal("1.20"))
+                        cargo_source = "barem_estimated"
+                        barem_applied = True
+
+                if not barem_applied:
+                    # Gerçek fatura flat tarife — barem/CargoPricing bu seller için geçerli değil.
+                    # CarrierFlatRate DB'den okur; kayıt yoksa FALLBACK dict'e düşer.
+                    order_cargo  = _get_carrier_flat_rate(carrier)
+                    cargo_source = "estimated"
+
+        if sold_item_count == 0:
+            order_cargo = Decimal("0.00")
+            if return_cargo_loss > Decimal("0.00"):
+                cargo_source = return_cargo_info.get("source", "estimated")
 
         # ── Step 3: Sipariş bazlı hizmet bedeli (TEK değer) ──
         service_tx = FinancialTransaction.objects.filter(
@@ -519,14 +553,18 @@ class ProfitCalculator:
             transaction_type=FinancialTransactionType.SERVICE_FEE.value
         ).first()
         order_service_fee = service_tx.amount if (service_tx and service_tx.amount > Decimal("0")) else Decimal("13.19")
+        if sold_item_count == 0 and total_sale == Decimal("0"):
+            order_service_fee = Decimal("0.00")
 
         # ── Step 4: KDV hesabı ──
-        kargo_kdv  = q(order_cargo * Decimal("20") / Decimal("120"))
+        total_cargo_for_tax = order_cargo + return_cargo_loss
+        kargo_kdv  = q(total_cargo_for_tax * Decimal("20") / Decimal("120"))
         hizmet_kdv = q(order_service_fee * Decimal("20") / Decimal("120"))
-        net_kdv    = q(sum_satis_kdv - sum_alis_kdv - sum_komisyon_kdv - kargo_kdv - hizmet_kdv)
+        raw_net_kdv = q(sum_satis_kdv - sum_alis_kdv - sum_komisyon_kdv - kargo_kdv - hizmet_kdv)
+        net_kdv    = max(raw_net_kdv, Decimal("0.00"))
 
         # ── Step 5: Net Kâr ──
-        net_profit = q(total_sale - sum_product_cost - sum_commission - order_cargo - order_service_fee - sum_stopaj - net_kdv)
+        net_profit = q(total_sale - sum_product_cost - sum_commission - order_cargo - return_cargo_loss - order_service_fee - sum_stopaj - net_kdv)
 
         profit_margin  = q((net_profit / total_sale) * Decimal("100")) if total_sale > Decimal("0") else Decimal("0")
         profit_on_cost = q((net_profit / sum_product_cost) * Decimal("100")) if sum_product_cost > Decimal("0") else Decimal("0")
@@ -537,6 +575,7 @@ class ProfitCalculator:
             "extra_product_cost": sum_extra_cost,
             "commission":         sum_commission,
             "cargo":              order_cargo,
+            "return_cargo_loss":   return_cargo_loss,
             "cargo_source":       cargo_source,  # "invoice" | "transaction" | "estimated"
             "service_fee":        order_service_fee,
             "withholding":        sum_stopaj,

@@ -23,6 +23,7 @@ from core.models import (
 )
 from core.services.trendyol_client import TrendyolApiClient, compute_payload_hash
 from core.services.checkpoint import SyncCheckpointService
+from core.services.order_amounts import parse_order_line_amounts
 from core.utils.encryption import decrypt_value
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,7 @@ class TrendyolOrderSyncService:
             start_date=start_date,
             end_date=now,
             sync_mode=SyncAuditLog.SyncMode.FULL,
+            order_by_field="OrderDate",
         )
 
     # ------------------------------------------------------------------
@@ -104,6 +106,7 @@ class TrendyolOrderSyncService:
             start_date=safe_start,
             end_date=now,
             sync_mode=SyncAuditLog.SyncMode.INCREMENTAL,
+            order_by_field="PackageLastModifiedDate",
         )
 
     # ------------------------------------------------------------------
@@ -118,6 +121,7 @@ class TrendyolOrderSyncService:
             start_date=start_date,
             end_date=end_date,
             sync_mode=SyncAuditLog.SyncMode.BACKFILL,
+            order_by_field="OrderDate",
         )
 
     # ------------------------------------------------------------------
@@ -128,6 +132,7 @@ class TrendyolOrderSyncService:
         start_date: datetime,
         end_date: datetime,
         sync_mode: str,
+        order_by_field: str = "PackageLastModifiedDate",
     ) -> SyncAuditLog:
         """Core sync runner — fetches, upserts, logs."""
         self._reset_counters()
@@ -147,6 +152,7 @@ class TrendyolOrderSyncService:
             orders_data = self.client.fetch_orders(
                 start_date=start_date,
                 end_date=end_date,
+                order_by_field=order_by_field,
             )
 
             # Deduplicate by shipmentPackageId (API may return same package from overlapping chunks)
@@ -245,6 +251,12 @@ class TrendyolOrderSyncService:
 
         # Micro export
         is_micro = o_data.get("micro", False)
+        is_fast_delivery = bool(o_data.get("fastDelivery")) or any(
+            opt.get("type") in {"FastDelivery", "TodayDelivery", "SameDayShipping"}
+            for line in o_data.get("lines", [])
+            for opt in (line.get("fastDeliveryOptions") or [])
+            if isinstance(opt, dict)
+        )
         
         # Country code
         country_code = "TR"
@@ -274,6 +286,17 @@ class TrendyolOrderSyncService:
             
             # Change detection — skip if hash is identical
             if existing.raw_payload_hash == payload_hash:
+                changed_fields = []
+                if getattr(existing, "fast_delivery", False) != is_fast_delivery:
+                    existing.fast_delivery = is_fast_delivery
+                    changed_fields.append("fast_delivery")
+                if changed_fields:
+                    existing.last_synced_at = timezone.now()
+                    changed_fields.append("last_synced_at")
+                    existing.save(update_fields=changed_fields)
+                    self._updated += 1
+                    self._upsert_order_lines(existing, o_data)
+                    return
                 self._skipped += 1
                 return
 
@@ -293,6 +316,7 @@ class TrendyolOrderSyncService:
             existing.country_code = country_code
             existing.cargo_provider_name = cargo_provider
             existing.cargo_tracking_number = cargo_tracking
+            existing.fast_delivery = is_fast_delivery
             existing.raw_payload_hash = payload_hash
             existing.last_synced_at = timezone.now()
             existing.save()
@@ -314,6 +338,7 @@ class TrendyolOrderSyncService:
                 country_code=country_code,
                 cargo_provider_name=cargo_provider,
                 cargo_tracking_number=cargo_tracking,
+                fast_delivery=is_fast_delivery,
                 raw_payload_hash=payload_hash,
                 last_synced_at=timezone.now(),
             )
@@ -341,8 +366,7 @@ class TrendyolOrderSyncService:
                     barcode=barcode,
                 ).select_related("product").first()
 
-            price = Decimal(str(line.get("amount", line.get("price", "0"))))
-            discount = Decimal(str(line.get("discount", "0")))
+            amounts = parse_order_line_amounts(line)
             quantity = int(line.get("quantity", 1))
             
             commission_rate_raw = line.get("commission")
@@ -354,9 +378,9 @@ class TrendyolOrderSyncService:
                 "product_variant": variant,
                 "sku": line.get("merchantSku", barcode),
                 "quantity": quantity,
-                "sale_price_gross": price,
-                "sale_price_net": price - discount,
-                "discount": discount,
+                "sale_price_gross": amounts["gross"],
+                "sale_price_net": amounts["net"],
+                "discount": amounts["discount"],
                 "status": item_status,
             }
             if commission_rate_raw is not None:

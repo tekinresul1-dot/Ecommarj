@@ -95,7 +95,7 @@ export default function GoogleLoginPage() {
                     const data = await api.post("/auth/google/", { id_token: response.credential });
                     setSession(data.tokens.access, data.tokens.refresh, data.user);
                     showToast("Google ile giriş başarılı. Yönlendiriliyorsunuz...", "success");
-                    setTimeout(() => router.push("/dashboard"), 1200);
+                    setTimeout(() => window.location.assign("/dashboard"), 600);
                 } catch (err: unknown) {
                     const message = err instanceof Error ? err.message : "Google ile giriş sırasında bir hata oluştu.";
                     setError(message);

@@ -35,6 +35,23 @@ def _get_tokens_for_user(user):
     }
 
 
+def _response_with_tokens(payload, *, http_status=status.HTTP_200_OK):
+    """Return auth payload and mirror the access token for Next middleware."""
+    response = Response(payload, status=http_status)
+    access_token = (payload.get("tokens") or {}).get("access")
+    if access_token:
+        response.set_cookie(
+            "access_token",
+            access_token,
+            max_age=8 * 60 * 60,
+            path="/",
+            secure=not settings.DEBUG,
+            httponly=False,
+            samesite="Lax",
+        )
+    return response
+
+
 def _build_company_name(first_name: str, last_name: str) -> str:
     full_name = f"{first_name} {last_name}".strip()
     return full_name or "EcomMarj Kullanıcısı"
@@ -190,11 +207,11 @@ class RegisterVerifyView(APIView):
 
         tokens = _get_tokens_for_user(user)
 
-        return Response({
+        return _response_with_tokens({
             "message": "Hesap doğrulandı ve giriş yapıldı.",
             "user": UserSerializer(user).data,
             "tokens": tokens,
-        }, status=status.HTTP_200_OK)
+        }, http_status=status.HTTP_200_OK)
 
 
 class RegisterResendOTPView(APIView):
@@ -335,13 +352,13 @@ class LoginView(APIView):
             pass
 
         tokens = _get_tokens_for_user(user)
-        return Response(
+        return _response_with_tokens(
             {
                 "message": "Giriş başarılı.",
                 "user": UserSerializer(user).data,
                 "tokens": tokens,
             },
-            status=status.HTTP_200_OK,
+            http_status=status.HTTP_200_OK,
         )
 
 
@@ -386,11 +403,11 @@ class AccessCodeLoginView(APIView):
                 pass
 
         tokens = _get_tokens_for_user(user)
-        return Response({
+        return _response_with_tokens({
             "message": "Kod ile giriş başarılı.",
             "user": UserSerializer(user).data,
             "tokens": tokens,
-        }, status=status.HTTP_200_OK)
+        }, http_status=status.HTTP_200_OK)
 
 
 class GoogleLoginView(APIView):
@@ -481,13 +498,13 @@ class GoogleLoginView(APIView):
         _ensure_user_profile(user)
         tokens = _get_tokens_for_user(user)
 
-        return Response(
+        return _response_with_tokens(
             {
                 "message": "Google ile giriş başarılı.",
                 "user": UserSerializer(user).data,
                 "tokens": tokens,
             },
-            status=status.HTTP_200_OK,
+            http_status=status.HTTP_200_OK,
         )
 
 
@@ -540,7 +557,9 @@ class LogoutView(APIView):
         except TokenError:
             # Already expired/blacklisted/invalid — desired end state reached.
             pass
-        return Response({"message": "Çıkış yapıldı."}, status=status.HTTP_200_OK)
+        response = Response({"message": "Çıkış yapıldı."}, status=status.HTTP_200_OK)
+        response.delete_cookie("access_token", path="/", samesite="Lax")
+        return response
 
 
 class SendOTPView(APIView):
@@ -696,11 +715,11 @@ class VerifyOTPView(APIView):
         
         tokens = _get_tokens_for_user(user)
         
-        return Response({
+        return _response_with_tokens({
             "message": "Giriş başarılı.",
             "user": UserSerializer(user).data,
             "tokens": tokens,
-        }, status=status.HTTP_200_OK)
+        }, http_status=status.HTTP_200_OK)
 
 
 class UpdateOnboardingStatusView(APIView):

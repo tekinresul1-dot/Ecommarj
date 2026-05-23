@@ -273,7 +273,7 @@ export default function ProductsPage() {
             const blob = await response.blob();
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement("a");
-            a.href = url; a.download = "Urun_Maliyetleri.xlsx";
+            a.href = url; a.download = "Islem_Gereken_Urun_Maliyetleri.xlsx";
             document.body.appendChild(a); a.click();
             window.URL.revokeObjectURL(url); document.body.removeChild(a);
             toast.success("Excel başarıyla indirildi.");

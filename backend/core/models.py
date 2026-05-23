@@ -239,6 +239,7 @@ class Order(TimestampedModel):
     cargo_tracking_number = models.CharField("Kargo Takip No", max_length=100, blank=True, default="")
     cargo_deci = models.DecimalField("Kargo Desi (Trendyol'dan)", max_digits=8, decimal_places=2, null=True, blank=True)
     cargo_cost = models.DecimalField("Kargo Maliyeti (Hesaplanan)", max_digits=10, decimal_places=2, null=True, blank=True)
+    fast_delivery = models.BooleanField("Hızlı Teslimat / Bugün Kargoda", default=False)
     
     # Sync metadata
     raw_payload_hash = models.CharField("Payload Hash", max_length=64, blank=True, default="")
@@ -394,6 +395,7 @@ class CargoInvoice(TimestampedModel):
     organization        = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="cargo_invoices")
     order_number        = models.CharField("Sipariş No", max_length=50, db_index=True)
     invoice_serial_number = models.CharField("Fatura Seri No", max_length=100)
+    parcel_unique_id    = models.CharField("Paket / Koli ID", max_length=100, blank=True, default="", db_index=True)
     amount              = models.DecimalField("Kargo Tutarı (KDV Dahil)", max_digits=10, decimal_places=2)
     desi                = models.DecimalField("Desi", max_digits=6, decimal_places=2, null=True, blank=True)
     shipment_package_type = models.CharField("Gönderi Tipi", max_length=200, blank=True)
@@ -402,7 +404,7 @@ class CargoInvoice(TimestampedModel):
     class Meta:
         verbose_name = "Kargo Faturası Kalemi"
         verbose_name_plural = "Kargo Faturası Kalemleri"
-        unique_together = ("organization", "order_number", "invoice_serial_number")
+        unique_together = ("organization", "order_number", "invoice_serial_number", "parcel_unique_id")
         indexes = [models.Index(fields=["organization", "order_number"])]
 
     def __str__(self):
@@ -662,21 +664,34 @@ class CheTransaction(TimestampedModel):
         (SOURCE_OTHER, 'Other Financials'),
     ]
 
-    transaction_id = models.CharField(max_length=100, unique=True)
+    transaction_id = models.CharField(max_length=100)
     transaction_date = models.DateTimeField()
     barcode = models.CharField(max_length=100, null=True, blank=True)
     transaction_type = models.CharField(max_length=100)
+    transaction_type_code = models.CharField(max_length=100, null=True, blank=True)
+    transaction_sub_type = models.CharField(max_length=100, null=True, blank=True)
     source = models.CharField(max_length=50, choices=SOURCE_CHOICES)
     receipt_id = models.BigIntegerField(null=True, blank=True)
     description = models.TextField(null=True, blank=True)
     debt = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     credit = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     commission_rate = models.DecimalField(max_digits=10, decimal_places=4, null=True, blank=True)
-    commission_amount = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
-    seller_revenue = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    commission_amount = models.DecimalField(max_digits=15, decimal_places=4, null=True, blank=True)
+    seller_revenue = models.DecimalField(max_digits=15, decimal_places=4, null=True, blank=True)
     order_number = models.CharField(max_length=100, null=True, blank=True)
+    shipment_package_id = models.BigIntegerField(null=True, blank=True)
     payment_order_id = models.BigIntegerField(null=True, blank=True)
+    payment_period = models.IntegerField(null=True, blank=True)
     payment_date = models.DateTimeField(null=True, blank=True)
+    commission_invoice_serial_number = models.CharField(max_length=100, null=True, blank=True)
+    seller_id = models.BigIntegerField(null=True, blank=True)
+    store_id = models.BigIntegerField(null=True, blank=True)
+    store_name = models.CharField(max_length=255, null=True, blank=True)
+    store_address = models.TextField(null=True, blank=True)
+    country = models.CharField(max_length=100, null=True, blank=True)
+    affiliate = models.CharField(max_length=50, null=True, blank=True)
+    order_date = models.DateTimeField(null=True, blank=True)
+    raw_payload = models.JSONField(default=dict, blank=True)
     organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name="che_transactions")
     account = models.ForeignKey('MarketplaceAccount', on_delete=models.CASCADE, related_name="che_transactions")
 
@@ -688,6 +703,14 @@ class CheTransaction(TimestampedModel):
             models.Index(fields=['order_number']),
             models.Index(fields=['barcode']),
             models.Index(fields=['organization', 'source', 'transaction_date']),
+            models.Index(fields=['account', 'source', 'transaction_id']),
+            models.Index(fields=['payment_order_id']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['account', 'source', 'transaction_id'],
+                name='core_chetx_account_source_txid_uniq',
+            ),
         ]
 
     def __str__(self):

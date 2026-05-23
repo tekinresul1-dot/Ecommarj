@@ -16,7 +16,7 @@ interface OrderBreakdown {
   extra_cost: string;
   commission: string;
   shipping_fee: string;
-  cargo_source: "invoice" | "transaction" | "deci_estimated" | "estimated";
+  cargo_source: "invoice" | "transaction" | "barem_estimated" | "deci_estimated" | "estimated";
   service_fee: string;
   withholding: string;
   net_kdv: string;
@@ -396,6 +396,7 @@ function OrderDetailsModal({ order, onClose }: { order: Order | null; onClose: (
               <ExpenseRow
                 label={
                   bd.cargo_source === "invoice" ? "Kargo Ücreti" :
+                  bd.cargo_source === "barem_estimated" ? "Kargo Ücreti (Trendyol Barem)" :
                   bd.cargo_source === "deci_estimated" ? "Kargo Ücreti (Desi × Tarife)" :
                   "Kargo Ücreti (Tahmini)"
                 }

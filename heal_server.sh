@@ -36,7 +36,14 @@ ssh -o StrictHostKeyChecking=no "$SERVER" << 'EOF'
     
     cd /opt/ecommarj
     
-    echo -e "\n${BLUE}1. Mevcut Konteyner Durumları (docker compose ps):${NC}"
+    echo -e "\n${BLUE}🔄 En son kodlar GitHub'dan çekiliyor (git pull)...${NC}"
+    git pull origin main
+    
+    echo -e "\n${BLUE}🏗️  Konteynerler baştan inşa ediliyor ve başlatılıyor (build & up)...${NC}"
+    docker compose build --no-cache
+    docker compose up -d
+    
+    echo -e "\n${BLUE}1. Güncel Konteyner Durumları (docker compose ps):${NC}"
     docker compose ps
     
     echo -e "\n${BLUE}2. Durdurulmuş veya Hatalı Konteyner Kontrolü & Log Analizi...${NC}"

@@ -247,9 +247,10 @@ class DashboardOverviewView(APIView):
 
         min_date, max_date = parse_istanbul_date_range(min_date_str, max_date_str)
         if min_date and max_date:
+            # Trendyol Satış & Operasyon paneli order_date bazlı filtreler.
+            # last_modified_date bazlı filtreleme Trendyol'dan ~2% sapma yaratıyordu.
             orders_qs = orders_qs.filter(
-                django_models.Q(last_modified_date__gte=min_date, last_modified_date__lte=max_date) |
-                django_models.Q(last_modified_date__isnull=True, order_date__gte=min_date, order_date__lte=max_date)
+                order_date__gte=min_date, order_date__lte=max_date
             )
 
         # ---------------------------------------------------------------
@@ -299,11 +300,11 @@ class DashboardOverviewView(APIView):
             qty=django_models.Sum("quantity"),
         )
         cancelled_agg = all_items_in_range_qs.filter(order__status__in=CANCEL_STATUSES).aggregate(
-            total=django_models.Sum("sale_price_net"),
+            total=django_models.Sum("sale_price_gross"),  # gross: Trendyol brüt satış havuzuyla tutarlı
             qty=django_models.Sum("quantity"),
         )
         returned_status_agg = all_items_in_range_qs.filter(order__status__in=RETURN_STATUSES).aggregate(
-            total=django_models.Sum("sale_price_net"),
+            total=django_models.Sum("sale_price_gross"),  # gross: Trendyol brüt satış havuzuyla tutarlı
             qty=django_models.Sum("quantity"),
         )
 
@@ -327,7 +328,9 @@ class DashboardOverviewView(APIView):
         total_discount = gross_all_agg["discount"] or Decimal("0.00")
         cancelled_total = cancelled_agg["total"] or Decimal("0.00")
         returned_status_total = returned_status_agg["total"] or Decimal("0.00")
-        returned_total = che_returned_total if che_returned_total > Decimal("0.00") else returned_status_total
+        # CHE iade tutarı: sadece status-based tutardan büyükse kullan
+        # (CHE'de farklı tarih evreni olabilir; tutarsız olursa status-based kazanır)
+        returned_total = che_returned_total if che_returned_total > returned_status_total else returned_status_total
         active_net_total = revenue_agg["total_net"] or Decimal("0.00")
         formula_net_sales = total_gross - cancelled_total - returned_total - total_discount
         toplam_ciro = max(formula_net_sales, Decimal("0.00"))
@@ -599,7 +602,7 @@ class DashboardOverviewView(APIView):
             "seller_id": str(getattr(MarketplaceAccount.objects.filter(organization=org, is_active=True).first(), "seller_id", "")),
             "organization_id": org.id,
             "marketplace": channel,
-            "date_filter_field": "last_modified_date_with_order_date_fallback",
+            "date_filter_field": "order_date",
             "date_start": min_date.isoformat() if min_date else None,
             "date_end": max_date.isoformat() if max_date else None,
             "orders_count": total_orders,

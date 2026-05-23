@@ -20,10 +20,10 @@ COPY . .
 # Make entrypoint executable
 RUN chmod +x entrypoint.sh
 
-# Run as a non-root user
-RUN adduser --disabled-password --gecos '' appuser \
-    && chown -R appuser:appuser /app
-USER appuser
+# Run as a root user to resolve host volume mounting permission issues (staticfiles, migrations)
+# RUN adduser --disabled-password --gecos '' appuser \
+#     && chown -R appuser:appuser /app
+# USER appuser
 
 EXPOSE 8000
 

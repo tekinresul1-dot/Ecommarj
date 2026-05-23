@@ -209,6 +209,7 @@ class DashboardOverviewView(APIView):
         user = request.user
         from core.models import UserProfile, Organization
         from collections import defaultdict
+        from django.core.cache import cache
         
         profile, _ = UserProfile.objects.get_or_create(user=user)
         org = profile.organization
@@ -222,6 +223,12 @@ class DashboardOverviewView(APIView):
         countries = request.query_params.get("countries", "")
         min_date_str = request.query_params.get("min_date")
         max_date_str = request.query_params.get("max_date")
+
+        # Redis cache key — kullanıcı+filtre kombinasyonuna özel
+        cache_key = f"dashboard_overview:{org.id}:{channel}:{countries}:{min_date_str}:{max_date_str}"
+        cached_response = cache.get(cache_key)
+        if cached_response is not None:
+            return Response(cached_response)
 
         # Organizasyonun siparişlerini çek
         # Trendyol panelinde domestic ve micro_export birlikte gösteriliyor
@@ -441,18 +448,18 @@ class DashboardOverviewView(APIView):
             "avg_discount_rate": str(round((total_discount / total_gross)*100, 2)) if total_gross > 0 else "0.00",
         }
         
-        # İade Metrikleri
-        from core.services.return_costs import order_has_return_activity, get_return_cargo_breakdown
+        # İade Metrikleri — Python döngüsü yerine SQL COUNT (N+1 sorgu önlendi)
         return_loss_val = breakdown.get(FinancialTransactionType.RETURN_LOSS.value, Decimal("0.00"))
-        returned_orders_count = sum(1 for order in orders_qs if order.status in CANCEL_STATUSES or order_has_return_activity(order))
+        # SQL aggregate ile iade/iptal sayısını hesapla
+        returned_orders_count = orders_qs.filter(
+            status__in=list(CANCEL_STATUSES) + list(RETURN_STATUSES)
+        ).count()
         real_return_rate = Decimal("0.00")
         if total_orders > 0:
             real_return_rate = round(Decimal(returned_orders_count) / Decimal(total_orders) * Decimal("100"), 2)
 
-        total_return_cargo_loss = Decimal("0.00")
-        for order in orders_qs.prefetch_related("items"):
-            if order_has_return_activity(order):
-                total_return_cargo_loss += get_return_cargo_breakdown(order)["total_cargo_loss"]
+        # Kargo kaybı: breakdown'dan al (ProfitCalculator zaten hesaplıyor)
+        total_return_cargo_loss = breakdown.get(FinancialTransactionType.RETURN_LOSS.value, Decimal("0.00"))
         
         return_metrics = {
             "return_rate": str(real_return_rate),
@@ -509,22 +516,35 @@ class DashboardOverviewView(APIView):
                 "profit": str(daily_profit_map.get(day, Decimal("0.00")))
             })
 
-        # Kritik Stok Uyarıları
+        # Kritik Stok Uyarıları — SQL filtresiyle (Python döngüsü yok)
         from core.models import Product
-        org_products = Product.objects.filter(organization=org, is_active=True)
-        low_stock_list = []
-        for p in org_products:
-            if p.is_low_stock:
-                low_stock_list.append({
-                    "id": p.id,
-                    "title": p.title,
-                    "barcode": p.barcode,
-                    "current_stock": p.current_stock,
-                    "initial_stock": p.initial_stock,
-                    "image_url": p.image_url
-                })
-        
-        low_stock_list = sorted(low_stock_list, key=lambda x: x["current_stock"])[:5]
+        from django.db.models import F, ExpressionWrapper, FloatField
+        # is_low_stock: current_stock <= initial_stock * 0.20 AND initial_stock >= 5 AND current_stock > 0
+        low_stock_qs = Product.objects.filter(
+            organization=org,
+            is_active=True,
+            initial_stock__gte=5,
+            current_stock__gt=0,
+        ).annotate(
+            threshold=ExpressionWrapper(
+                F('initial_stock') * 0.20,
+                output_field=FloatField()
+            )
+        ).filter(
+            current_stock__lte=django_models.F('threshold')
+        ).order_by('current_stock')[:5]
+
+        low_stock_list = [
+            {
+                "id": p.id,
+                "title": p.title,
+                "barcode": p.barcode,
+                "current_stock": p.current_stock,
+                "initial_stock": p.initial_stock,
+                "image_url": p.image_url
+            }
+            for p in low_stock_qs
+        ]
 
         # CHE finans durumu — dashboard sipariş tarihine göre çalışır; bu özet
         # finans kayıtlarının varlığını ve doğrulanmış komisyon/hakediş kapsamını gösterir.
@@ -615,7 +635,7 @@ class DashboardOverviewView(APIView):
             ],
         }
 
-        return Response({
+        response_data = {
             "kpis": {
                 "total_orders": active_order_count,
                 "gross_revenue": str(total_gross),
@@ -652,7 +672,10 @@ class DashboardOverviewView(APIView):
                 "platform_service_fee_total": str(che_platform_fee_total),
             },
             "debug": debug_payload,
-        })
+        }
+        # Redis'e 2 dakika cache'le (120 saniye)
+        cache.set(cache_key, response_data, 120)
+        return Response(response_data)
 
 
 class ProductCostStatusView(APIView):

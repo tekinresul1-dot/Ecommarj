@@ -49,24 +49,24 @@ ssh -o StrictHostKeyChecking=no "$SERVER" << 'EOF'
     git pull origin main
     
     echo -e "${BLUE}📊 Docker Konteyner durumları listeleniyor...${NC}"
-    docker compose ps
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
     
     echo -e "${BLUE}🏗️  Docker imajları baştan derleniyor (no-cache)...${NC}"
-    docker compose build --no-cache
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml build --no-cache
     
     echo -e "${BLUE}🚀 Konteynerler başlatılıyor (up -d)...${NC}"
-    docker compose up -d
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
     
     echo -e "${BLUE}🗄️  Django veritabanı migration'ları uygulanıyor...${NC}"
-    docker compose exec backend python manage.py migrate
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backend python manage.py migrate
     
     echo -e "${BLUE}📁 Statik dosyalar toplanıyor (collectstatic)...${NC}"
-    docker compose exec backend python manage.py collectstatic --noinput
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backend python manage.py collectstatic --noinput
     
     echo -e "${GREEN}✅ Sunucuda deploy adımları başarıyla tamamlandı!${NC}"
     echo ""
     echo -e "${BLUE}📜 Son 100 Backend Logu:${NC}"
-    docker compose logs --tail=100 backend
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml logs --tail=100 backend
 EOF
 
 echo ""

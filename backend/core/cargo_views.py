@@ -210,8 +210,18 @@ class CustomCargoRateImportView(APIView):
         wb = openpyxl.load_workbook(file, read_only=True, data_only=True)
         ws = wb.active
         rows_iter = ws.iter_rows(values_only=True)
-        headers = next(rows_iter)
-        headers = [str(h).strip() if h else "" for h in headers]
+        
+        headers = None
+        for row in rows_iter:
+            # Check if this row contains our expected headers
+            row_strs = [str(cell).strip().lower() for cell in row if cell is not None]
+            if "desi" in row_strs or "desi_kg" in row_strs or "desi/kg" in row_strs:
+                headers = [str(h).strip() if h else "" for h in row]
+                break
+                
+        if not headers:
+            raise Exception("Excel dosyasında başlık satırı ('Desi' vs.) bulunamadı.")
+            
         result = []
         for row in rows_iter:
             if not any(row):
@@ -321,29 +331,43 @@ class CargoTemplateDownloadView(APIView):
 
     def get(self, request):
         import openpyxl
-        from openpyxl.styles import Font, PatternFill
+        from openpyxl.styles import Font, PatternFill, Alignment
         
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Kargo Fiyatları"
         
+        # Row 1 and 2: Instruction text
+        instruction = "Anlaşmalı olduğunuz kargo firmasının desi fiyatlarını tablodan girebilirsiniz. Boş bırakılan desilerde Trendyol anlaşmalı kargo fiyatları baz alınacaktır."
+        ws.merge_cells("A1:B2")
+        cell_instr = ws["A1"]
+        cell_instr.value = instruction
+        cell_instr.font = Font(color="FF0000", bold=True)
+        cell_instr.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        
+        # Row 4: Headers
         headers = ["Desi", "Kargo Fiyatı (KDV Dahil)"]
-        ws.append(headers)
+        header_font = Font(bold=True)
+        header_fill = PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")
         
-        header_font = Font(bold=True, color="FFFFFF")
-        header_fill = PatternFill(start_color="333333", end_color="333333", fill_type="solid")
-        
-        for col_num, _ in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col_num)
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=4, column=col_num)
+            cell.value = header
             cell.font = header_font
             cell.fill = header_fill
-            ws.column_dimensions[openpyxl.utils.get_column_letter(col_num)].width = 25
+            cell.alignment = Alignment(horizontal="center")
             
-        for i in range(1, 51):
-            ws.append([i, ""])
+        # Rows 5 to 104: Desi 1 to 100
+        for i in range(1, 101):
+            cell_desi = ws.cell(row=4+i, column=1)
+            cell_desi.value = i
+            cell_desi.alignment = Alignment(horizontal="right")
             
-        response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        response['Content-Disposition'] = 'attachment; filename="kargo_fiyat_sablonu.xlsx"'
-        wb.save(response)
+        # Adjust column widths
+        ws.column_dimensions["A"].width = 15
+        ws.column_dimensions["B"].width = 30
         
+        response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        response["Content-Disposition"] = 'attachment; filename="kargo_sablonu.xlsx"'
+        wb.save(response)
         return response

@@ -133,7 +133,8 @@ export default function CargoSettingsPage() {
   };
 
   const handleDownloadTemplate = () => {
-    window.location.href = `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/settings/cargo/template/`;
+    const baseUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/api\/?$/, "");
+    window.location.href = `${baseUrl}/api/settings/cargo/template/`;
   };
 
   if (isLoading) {

@@ -16,54 +16,14 @@ logger = logging.getLogger(__name__)
 
 def check_order_limit(user):
     """Kullanıcının aylık sipariş limitini kontrol eder."""
-    from django.utils import timezone
-    from core.models import Order
-    try:
-        sub = user.usersubscription
-        if sub.admin_override:
-            return True, None
-        now = timezone.now()
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        try:
-            profile = user.profile
-            org = profile.organization
-        except Exception:
-            return True, None
-        if not org:
-            return True, None
-        order_count = Order.objects.filter(
-            organization=org, order_date__gte=month_start
-        ).count()
-        limit = sub.plan.order_limit if sub.plan else 1000
-        if order_count >= limit:
-            return False, f"Aylık {limit} sipariş limitine ulaştınız. Planınızı yükseltin."
-        return True, None
-    except Exception:
-        return True, None
+    # Abonelik sistemi henüz aktif olmadığı için bypass ediliyor
+    return True, None
 
 
 def check_store_limit(user):
     """Kullanıcının mağaza bağlantı limitini kontrol eder."""
-    from core.models import MarketplaceAccount, UserProfile
-    try:
-        sub = user.usersubscription
-        if sub.admin_override:
-            return True, None
-        try:
-            org = user.profile.organization
-        except Exception:
-            return True, None
-        if not org:
-            return True, None
-        store_count = MarketplaceAccount.objects.filter(
-            organization=org, is_active=True
-        ).count()
-        limit = sub.plan.store_limit if sub.plan else 1
-        if store_count >= limit:
-            return False, f"Planınız maksimum {limit} mağaza bağlantısına izin veriyor."
-        return True, None
-    except Exception:
-        return True, None
+    # Abonelik sistemi henüz aktif olmadığı için bypass ediliyor
+    return True, None
 
 
 def check_trial_expiry(user):
@@ -241,11 +201,7 @@ def expire_overdue_subscriptions():
 
 
 def check_user_access(user) -> tuple[bool, str]:
-    """Kullanıcının erişim hakkı var mı? (allowed, reason) döner.
-    Erişim engelleme sıralaması: is_active → is_suspended → ödeme gecikmesi →
-    abonelik durumu (admin_override hepsini geçer)."""
-    from core.models import Payment
-
+    """Kullanıcının erişim hakkı var mı? (allowed, reason) döner."""
     if not user or not user.is_authenticated:
         return False, "Giriş gerekiyor."
     if not user.is_active:
@@ -255,28 +211,5 @@ def check_user_access(user) -> tuple[bool, str]:
     if profile and profile.is_suspended:
         return False, f"Hesabınız askıya alındı. Sebep: {profile.suspension_reason or 'Belirtilmedi'}"
 
-    # 7+ gün gecikmiş ödeme
-    seven_days_ago = timezone.now() - timedelta(days=7)
-    has_overdue = Payment.objects.filter(
-        user=user, status="overdue", due_date__lt=seven_days_ago,
-    ).exists()
-    if has_overdue and not (profile and profile.admin_override):
-        return False, "Ödemeniz 7 günden fazla gecikti. Lütfen ödemenizi yapın."
-
-    # admin_override (profilde veya abonelikte) varsa direkt geç
-    if profile and profile.admin_override:
-        return True, ""
-
-    sub = getattr(user, "usersubscription", None)
-    if sub is None:
-        return False, "Aktif aboneliğiniz yok."
-    if not sub.is_access_allowed():
-        msg_map = {
-            "expired": "Aboneliğinizin süresi doldu. Lütfen yenileyin.",
-            "cancelled": "Aboneliğiniz iptal edilmiş.",
-            "suspended": "Aboneliğiniz askıya alındı.",
-            "passive": "Aboneliğiniz pasif durumda.",
-            "past_due": "Ödemeniz gecikti.",
-        }
-        return False, msg_map.get(sub.status, "Aktif aboneliğiniz yok.")
+    # Abonelik sistemi henüz aktif olmadığı için aktif hesaplara doğrudan izin veriliyor
     return True, ""

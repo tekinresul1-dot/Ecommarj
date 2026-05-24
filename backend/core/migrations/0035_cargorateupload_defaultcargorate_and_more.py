@@ -80,16 +80,6 @@ class Migration(migrations.Migration):
             model_name='cargorateimporthistory',
             name='organization',
         ),
-        migrations.RenameIndex(
-            model_name='chetransaction',
-            new_name='core_chetra_account_b9cde9_idx',
-            old_name='core_chetra_account_3f3e5a_idx',
-        ),
-        migrations.RenameIndex(
-            model_name='chetransaction',
-            new_name='core_chetra_payment_c17409_idx',
-            old_name='core_chetra_payment_64cc5c_idx',
-        ),
         migrations.RemoveField(
             model_name='sellercargosettings',
             name='apply_barem_0_199',

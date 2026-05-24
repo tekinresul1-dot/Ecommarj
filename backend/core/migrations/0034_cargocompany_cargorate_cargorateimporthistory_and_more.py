@@ -78,16 +78,7 @@ class Migration(migrations.Migration):
                 'verbose_name_plural': 'Satıcı Kargo Ayarları',
             },
         ),
-        migrations.RenameIndex(
-            model_name='chetransaction',
-            new_name='core_chetra_account_b9cde9_idx',
-            old_name='core_chetra_account_3f3e5a_idx',
-        ),
-        migrations.RenameIndex(
-            model_name='chetransaction',
-            new_name='core_chetra_payment_c17409_idx',
-            old_name='core_chetra_payment_64cc5c_idx',
-        ),
+
         migrations.AlterField(
             model_name='order',
             name='status',

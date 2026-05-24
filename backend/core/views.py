@@ -349,7 +349,15 @@ class DashboardOverviewView(APIView):
         total_gross = gross_all_agg["gross"] or Decimal("0.00")
         line_discount_total = gross_all_agg["discount"] or Decimal("0.00")
         package_discount_total = package_discount_agg["package_discount"] or Decimal("0.00")
-        total_discount = package_discount_total if package_discount_total > Decimal("0.00") else line_discount_total
+        package_discount_is_reliable = (
+            package_discount_total > Decimal("0.00")
+            and (
+                line_discount_total <= Decimal("0.00")
+                or package_discount_total >= (line_discount_total * Decimal("0.80"))
+            )
+        )
+        total_discount = package_discount_total if package_discount_is_reliable else line_discount_total
+        final_discount_source = "package_total_discount" if package_discount_is_reliable else "line_discount_total"
         cancelled_total = cancelled_agg["total"] or Decimal("0.00")
         returned_status_total = returned_status_agg["total"] or Decimal("0.00")
         # CHE iade tutarı: sadece status-based tutardan büyükse kullan
@@ -644,7 +652,8 @@ class DashboardOverviewView(APIView):
             "package_total_discount": str(package_discount_total),
             "line_discount_total": str(line_discount_total),
             "discount_total": str(total_discount),
-            "final_discount_source": "package_total_discount" if package_discount_total > Decimal("0.00") else "line_discount_total",
+            "final_discount_source": final_discount_source,
+            "package_discount_is_reliable": package_discount_is_reliable,
             "net_sales_formula": "gross_sales_total - cancelled_total - returned_total - discount_total",
             "net_sales_total": str(toplam_ciro),
             "costed_sales_total": str(total_costed_revenue),

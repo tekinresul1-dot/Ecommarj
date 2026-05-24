@@ -6,9 +6,9 @@ from zoneinfo import ZoneInfo
 
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
-from django.db.models import Count
+from django.db.models import Sum
 
-from core.models import MarketplaceAccount, Order, OrderItem
+from core.models import CheTransaction, MarketplaceAccount, Order, OrderItem
 from core.views import (
     CANCEL_STATUSES,
     DASHBOARD_REVENUE_STATUSES,
@@ -151,8 +151,26 @@ class Command(BaseCommand):
         package_discount_total = sum((o.package_total_discount or Decimal("0")) for o in orders_qs)
         seller_discount_total = sum((o.package_seller_discount or Decimal("0")) for o in orders_qs)
         ty_discount_total = sum((o.package_ty_discount or Decimal("0")) for o in orders_qs)
-        final_discount_used = package_discount_total if package_discount_total > Decimal("0") else discount_total
-        final_discount_source = "package_total_discount" if package_discount_total > Decimal("0") else "line_discount_total"
+        package_discount_is_reliable = (
+            package_discount_total > Decimal("0")
+            and (
+                discount_total <= Decimal("0")
+                or package_discount_total >= (discount_total * Decimal("0.80"))
+            )
+        )
+        final_discount_used = package_discount_total if package_discount_is_reliable else discount_total
+        final_discount_source = "package_total_discount" if package_discount_is_reliable else "line_discount_total"
+
+        che_returned_total = CheTransaction.objects.filter(
+            organization=org,
+            source=CheTransaction.SOURCE_SETTLEMENTS,
+            transaction_type_code="Return",
+            order_date__gte=start_local,
+            order_date__lte=end_local,
+        ).aggregate(total=Sum("debt"))["total"] or Decimal("0")
+        returned_status_total = returned_total
+        returned_total = che_returned_total if che_returned_total > returned_status_total else returned_status_total
+
         net_sales_total = gross_total - cancelled_total - returned_total - final_discount_used
         duplicate_order_numbers = sum(1 for _, count in Counter(order_numbers).items() if count > 1)
         duplicate_package_ids = sum(1 for _, count in Counter(package_ids).items() if count > 1)
@@ -206,6 +224,9 @@ class Command(BaseCommand):
             "line_discount_total": money(discount_total),
             "final_discount_used": money(final_discount_used),
             "final_discount_source": final_discount_source,
+            "package_discount_is_reliable": package_discount_is_reliable,
+            "returned_status_total": money(returned_status_total),
+            "che_returned_total": money(che_returned_total),
             "net_sales_total": money(net_sales_total),
             "costed_net_sales_total": money(costed_net_total),
             "missing_cost_sales_total": money(missing_cost_total),

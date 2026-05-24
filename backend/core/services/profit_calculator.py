@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 from decimal import Decimal
 from typing import Dict, Any
@@ -142,6 +143,84 @@ def reset_pricing_caches() -> None:
     _CARRIER_FLAT_RATE_CACHE = None
     _CARGO_PRICING_CACHE = None
     _CARGO_PRICE_BY_DESI_CACHE = None
+
+
+def get_cargo_cost_from_settings(organization, carrier_name: str, desi: int | None) -> tuple[Decimal, str]:
+    """
+    Yeni Kargo Ayarları modülünden kargo maliyetini belirler.
+    
+    Öncelik sırası:
+    1. Satıcıya özel CargoRate (organization bazlı)
+    2. Global CargoRate (organization=None)
+    3. Legacy fallback (CarrierFlatRate / hardcoded)
+    
+    Returns: (cargo_cost_kdv_dahil, cargo_source)
+    """
+    from core.models import CargoRate, CargoCompany, SellerCargoSettings
+
+    if desi is None or desi < 1:
+        desi = 1  # Minimum desi fallback
+
+    # ── Satıcı ayarlarını al ──
+    try:
+        seller_settings = SellerCargoSettings.objects.get(organization=organization)
+    except SellerCargoSettings.DoesNotExist:
+        seller_settings = None
+
+    # ── Kargo firmasını belirle ──
+    resolved_carrier = carrier_name
+    if seller_settings:
+        if carrier_name and seller_settings.use_order_cargo_company:
+            resolved_carrier = carrier_name
+        elif seller_settings.use_default_if_missing and seller_settings.default_cargo_company:
+            resolved_carrier = seller_settings.default_cargo_company.name
+        elif not carrier_name and seller_settings.default_cargo_company:
+            resolved_carrier = seller_settings.default_cargo_company.name
+
+    # ── Firma adını normalize et → CargoCompany eşleşmesi ──
+    normalized_carrier = _normalize_carrier(resolved_carrier) if resolved_carrier else ""
+
+    # ── CargoCompany bul ──
+    company = None
+    if normalized_carrier:
+        company = CargoCompany.objects.filter(
+            name__iexact=normalized_carrier, is_active=True
+        ).first()
+        if not company:
+            # Fuzzy match — normalize'da dönebilecek varyantları dene
+            for cc in CargoCompany.objects.filter(is_active=True):
+                if _normalize_carrier(cc.name) == normalized_carrier:
+                    company = cc
+                    break
+
+    if not company:
+        # CargoCompany bulunamadı → legacy fallback
+        return _get_carrier_flat_rate(normalized_carrier or ""), "flat_estimated"
+
+    # ── 1. Satıcıya özel fiyat ──
+    rate = CargoRate.objects.filter(
+        organization=organization,
+        cargo_company=company,
+        desi_kg=desi,
+        is_active=True,
+    ).first()
+
+    if rate:
+        return rate.price, "seller_rate"
+
+    # ── 2. Global varsayılan fiyat ──
+    global_rate = CargoRate.objects.filter(
+        organization__isnull=True,
+        cargo_company=company,
+        desi_kg=desi,
+        is_active=True,
+    ).first()
+
+    if global_rate:
+        return global_rate.price, "default_rate"
+
+    # ── 3. Legacy fallback ──
+    return _get_carrier_flat_rate(normalized_carrier), "flat_estimated"
 
 
 class ProfitCalculator:
@@ -519,7 +598,7 @@ class ProfitCalculator:
                 cargo_source = "transaction"
                 cargo_source = "transaction"
             else:
-                # Öncelik 3: Desi × birim_fiyat tahmini (fallback)
+                # Öncelik 3: Yeni Cargo Ayarları Sistemi (SellerCargoSettings -> CargoRate -> Legacy Fallback)
                 raw_carrier = order.cargo_provider_name or ""
                 if not raw_carrier and items:
                     first = items[0]
@@ -528,19 +607,34 @@ class ProfitCalculator:
                 carrier = _normalize_carrier(raw_carrier)
 
                 barem_applied = False
+                
+                # Barem desteği ayarlara bağlı olarak uygulanmalı
+                from core.models import SellerCargoSettings
+                try:
+                    seller_settings = SellerCargoSettings.objects.get(organization=order.organization)
+                    apply_barem_0_199 = seller_settings.apply_barem_0_199
+                    apply_barem_200_349 = seller_settings.apply_barem_200_349
+                except SellerCargoSettings.DoesNotExist:
+                    apply_barem_0_199 = True
+                    apply_barem_200_349 = True
+
                 if total_desi > Decimal("0.00") and total_desi <= Decimal("10.00"):
                     target_table = "table1" if fast_delivery else "table2"
-                    price_range = "0_199" if total_sale < Decimal("200.00") else "200_349"
-                    if carrier in TRENDYOL_BAREM_RATES.get(target_table, {}).get(price_range, {}):
+                    
+                    price_range = None
+                    if total_sale < Decimal("200.00") and apply_barem_0_199:
+                        price_range = "0_199"
+                    elif total_sale >= Decimal("200.00") and total_sale <= Decimal("349.99") and apply_barem_200_349:
+                        price_range = "200_349"
+
+                    if price_range and carrier in TRENDYOL_BAREM_RATES.get(target_table, {}).get(price_range, {}):
                         order_cargo = q(TRENDYOL_BAREM_RATES[target_table][price_range][carrier] * Decimal("1.20"))
                         cargo_source = "barem_estimated"
                         barem_applied = True
 
                 if not barem_applied:
-                    # Gerçek fatura flat tarife — barem/CargoPricing bu seller için geçerli değil.
-                    # CarrierFlatRate DB'den okur; kayıt yoksa FALLBACK dict'e düşer.
-                    order_cargo  = _get_carrier_flat_rate(carrier)
-                    cargo_source = "estimated"
+                    desi_int = int(total_desi) if total_desi > 0 else 1
+                    order_cargo, cargo_source = get_cargo_cost_from_settings(order.organization, raw_carrier, desi_int)
 
         if sold_item_count == 0:
             order_cargo = Decimal("0.00")

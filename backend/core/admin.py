@@ -12,6 +12,10 @@ from .models import (
     SyncCheckpoint,
     SyncAuditLog,
     CargoPrice,
+    CargoCompany,
+    CargoRate,
+    SellerCargoSettings,
+    CargoRateImportHistory,
     SubscriptionPlan,
     UserSubscription,
     Payment,
@@ -265,6 +269,39 @@ class CargoPriceAdmin(admin.ModelAdmin):
     list_display = ("desi", "price", "cargo_provider", "is_active", "updated_at")
     list_editable = ("price", "is_active")
     ordering = ("desi",)
+
+
+@admin.register(CargoCompany)
+class CargoCompanyAdmin(admin.ModelAdmin):
+    list_display = ("name", "code", "is_active", "created_at")
+    list_editable = ("is_active",)
+    search_fields = ("name", "code")
+    ordering = ("name",)
+
+
+@admin.register(CargoRate)
+class CargoRateAdmin(admin.ModelAdmin):
+    list_display = ("organization", "cargo_company", "desi_kg", "price", "is_active", "updated_at")
+    list_editable = ("price", "is_active")
+    list_filter = ("cargo_company", "organization", "is_active")
+    search_fields = ("organization__name", "cargo_company__name")
+    ordering = ("organization", "cargo_company", "desi_kg")
+
+
+@admin.register(SellerCargoSettings)
+class SellerCargoSettingsAdmin(admin.ModelAdmin):
+    list_display = ("organization", "default_cargo_company", "use_order_cargo_company", "apply_barem_0_199", "apply_barem_200_349")
+    list_filter = ("apply_barem_0_199", "apply_barem_200_349")
+    search_fields = ("organization__name",)
+
+
+@admin.register(CargoRateImportHistory)
+class CargoRateImportHistoryAdmin(admin.ModelAdmin):
+    list_display = ("organization", "file_name", "imported_rows", "failed_rows", "status", "created_at")
+    list_filter = ("status",)
+    search_fields = ("organization__name", "file_name")
+    readonly_fields = ("error_message", "created_at")
+    ordering = ("-created_at",)
 
 
 # ===========================================================================

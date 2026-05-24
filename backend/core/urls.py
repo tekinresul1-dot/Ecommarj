@@ -20,6 +20,10 @@ from .sync_views import (
     TrendyolBackfillSyncView, TrendyolClaimsSyncView,
     TrendyolWebhookView, SyncStatusView,
 )
+from .cargo_views import (
+    CargoSettingsView, CargoCompanyListView, CargoRateView,
+    CargoBulkUpdateView, CargoRateImportView, CargoRateResetView,
+)
 
 urlpatterns = [
     # Auth
@@ -60,6 +64,14 @@ urlpatterns = [
     path("products/sync-stock/", ProductStockSyncView.as_view(), name="product-sync-stock"),
     path("orders/", OrderListView.as_view(), name="order-list"),
     path("orders/export-excel/", OrderExcelExportView.as_view(), name="order-export-excel"),
+
+    # Cargo Settings
+    path("settings/cargo/", CargoSettingsView.as_view(), name="cargo-settings"),
+    path("settings/cargo/companies/", CargoCompanyListView.as_view(), name="cargo-companies"),
+    path("settings/cargo/rates/", CargoRateView.as_view(), name="cargo-rates"),
+    path("settings/cargo/rates/bulk-update/", CargoBulkUpdateView.as_view(), name="cargo-bulk-update"),
+    path("settings/cargo/rates/import/", CargoRateImportView.as_view(), name="cargo-import"),
+    path("settings/cargo/rates/reset-defaults/", CargoRateResetView.as_view(), name="cargo-reset-defaults"),
 
     # Live Performance
     path("live-performance/", LivePerformanceView.as_view(), name="live-performance"),

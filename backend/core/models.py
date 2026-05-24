@@ -753,6 +753,129 @@ class CargoPrice(models.Model):
 
 
 # ---------------------------------------------------------------------------
+# Cargo Settings — Multi-Tenant Kargo Yönetimi
+# ---------------------------------------------------------------------------
+
+class CargoCompany(TimestampedModel):
+    """Kargo firması referans tablosu. Global — tüm satıcılar aynı firma listesini görür."""
+    name = models.CharField("Firma Adı", max_length=100, unique=True)
+    code = models.CharField("Kod", max_length=30, unique=True)
+    is_active = models.BooleanField("Aktif", default=True)
+
+    class Meta:
+        verbose_name = "Kargo Firması"
+        verbose_name_plural = "Kargo Firmaları"
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class CargoRate(TimestampedModel):
+    """
+    Satıcı bazlı, firma + desi fiyat tablosu.
+    organization=None ise global varsayılan fiyattır.
+    """
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE,
+        related_name="cargo_rates",
+        null=True, blank=True,
+        help_text="Boşsa global varsayılan fiyattır."
+    )
+    cargo_company = models.ForeignKey(
+        CargoCompany, on_delete=models.CASCADE,
+        related_name="rates"
+    )
+    desi_kg = models.IntegerField("Desi/KG")
+    price = models.DecimalField("Fiyat (KDV Dahil, TL)", max_digits=10, decimal_places=2)
+    is_active = models.BooleanField("Aktif", default=True)
+
+    class Meta:
+        verbose_name = "Kargo Fiyatı (Satıcı Bazlı)"
+        verbose_name_plural = "Kargo Fiyatları (Satıcı Bazlı)"
+        ordering = ["desi_kg", "cargo_company__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "cargo_company", "desi_kg"],
+                name="unique_org_company_desi",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization", "cargo_company"]),
+        ]
+
+    def __str__(self):
+        org = self.organization.name if self.organization else "GLOBAL"
+        return f"{org} — {self.cargo_company.name} — {self.desi_kg} Desi: ₺{self.price}"
+
+
+class SellerCargoSettings(TimestampedModel):
+    """Satıcının kargo tercih ayarları."""
+    organization = models.OneToOneField(
+        Organization, on_delete=models.CASCADE,
+        related_name="cargo_settings"
+    )
+    default_cargo_company = models.ForeignKey(
+        CargoCompany, on_delete=models.SET_NULL,
+        null=True, blank=True,
+        verbose_name="Varsayılan Kargo Firması"
+    )
+    use_order_cargo_company = models.BooleanField(
+        "Siparişteki kargo firmasını kullan",
+        default=True,
+        help_text="Trendyol siparişinden kargo firması gelirse onu kullan."
+    )
+    use_default_if_missing = models.BooleanField(
+        "Firma gelmezse varsayılanı kullan",
+        default=True,
+        help_text="Sipariş verisinde kargo firması yoksa varsayılan firmayı kullan."
+    )
+    apply_barem_0_199 = models.BooleanField(
+        "0₺ - 199₺ barem indirimi uygula",
+        default=True,
+        help_text="Kâr hesabında 0-199₺ arası kargo barem desteğini uygula."
+    )
+    apply_barem_200_349 = models.BooleanField(
+        "200₺ - 349₺ barem indirimi uygula",
+        default=True,
+        help_text="Kâr hesabında 200-349₺ arası kargo barem desteğini uygula."
+    )
+    custom_note = models.TextField("Not", blank=True, default="")
+
+    class Meta:
+        verbose_name = "Satıcı Kargo Ayarı"
+        verbose_name_plural = "Satıcı Kargo Ayarları"
+
+    def __str__(self):
+        return f"{self.organization.name} — Kargo Ayarları"
+
+
+class CargoRateImportHistory(TimestampedModel):
+    """Excel/CSV import geçmişi."""
+    organization = models.ForeignKey(
+        Organization, on_delete=models.CASCADE,
+        related_name="cargo_rate_imports"
+    )
+    file_name = models.CharField("Dosya Adı", max_length=255)
+    imported_rows = models.IntegerField("Başarılı Satır", default=0)
+    failed_rows = models.IntegerField("Hatalı Satır", default=0)
+    status = models.CharField(
+        "Durum", max_length=20,
+        choices=[("success", "Başarılı"), ("partial", "Kısmi"), ("failed", "Başarısız")],
+        default="success"
+    )
+    error_message = models.TextField("Hata Mesajı", blank=True, default="")
+
+    class Meta:
+        verbose_name = "Kargo Fiyat İçe Aktarma Geçmişi"
+        verbose_name_plural = "Kargo Fiyat İçe Aktarma Geçmişleri"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.organization.name} — {self.file_name} ({self.status})"
+
+
+# ---------------------------------------------------------------------------
 # Subscription
 # ---------------------------------------------------------------------------
 

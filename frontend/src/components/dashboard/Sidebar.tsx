@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import {
     BarChart3, Activity, Percent, FileText, AlertTriangle,
     CreditCard, Settings, ShoppingBag, Package, Layers,
-    RotateCcw, Megaphone, Tag, Sliders, X
+    RotateCcw, Megaphone, Tag, Sliders, X, Truck
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -29,7 +29,14 @@ const navigation = [
     { name: "Ürün Ayarları", href: "/products", icon: Sliders },
     { name: "Uyarılar", href: "/alerts", icon: AlertTriangle },
     { name: "Hakediş Kontrolü", href: "/payouts", icon: CreditCard },
-    { name: "Ayarlar", href: "/settings", icon: Settings },
+    {
+        name: "Ayarlar",
+        icon: Settings,
+        children: [
+            { name: "Entegrasyonlar", href: "/settings", icon: Settings },
+            { name: "Kargo Ayarları", href: "/settings/cargo", icon: Truck },
+        ],
+    },
 ];
 
 export function Sidebar({ mobileNavOpen, setMobileNavOpen }: { mobileNavOpen: boolean, setMobileNavOpen: (v: boolean) => void }) {

@@ -6,6 +6,7 @@ Bu modül mevcut iş mantığı view'larını DEĞİŞTİRMEZ — sadece üzerin
 katmanı ekler. Tüm yaşam döngüsü işlemleri ilgili servislere delege edilir;
 servisler de AdminLog'a yazar.
 """
+from __future__ import annotations
 import logging
 from datetime import timedelta
 from decimal import Decimal

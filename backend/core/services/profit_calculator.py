@@ -2,7 +2,7 @@ from __future__ import annotations
 import logging
 from decimal import Decimal
 from typing import Dict, Any
-from core.models import OrderItem, FinancialTransactionType
+from core.models import OrderItem, FinancialTransactionType, FinancialTransaction
 
 logger = logging.getLogger(__name__)
 

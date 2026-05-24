@@ -94,17 +94,23 @@ export default function CargoSettingsPage() {
       const formData = new FormData();
       formData.append("file", file);
       
-      const res: any = await api.post("/settings/cargo/custom-rates/import/", formData, {
-        headers: { "Content-Type": "multipart/form-data" }
+      const token = localStorage.getItem("access_token");
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/settings/cargo/custom-rates/import/`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`
+        },
+        body: formData
       });
+      const data = await res.json();
       
-      if (res.status === "success" || res.status === "partial") {
+      if (res.ok && (data.status === "success" || data.status === "partial")) {
         toast.success("Fiyatlar yüklendi", { 
-          description: `${res.imported_rows} fiyat kaydedildi. ${res.failed_rows > 0 ? res.failed_rows + " satır hatalıydı." : ""}`
+          description: `${data.imported_rows} fiyat kaydedildi. ${data.failed_rows > 0 ? data.failed_rows + " satır hatalıydı." : ""}`
         });
         fetchData(); // Refresh UI
       } else {
-        toast.error("Yükleme başarısız", { description: res.errors?.[0] || "Bir hata oluştu." });
+        toast.error("Yükleme başarısız", { description: data.errors?.[0] || "Bir hata oluştu." });
       }
     } catch (error: any) {
       toast.error("Hata", { description: "Dosya yüklenirken hata oluştu." });

@@ -13,9 +13,10 @@ from .models import (
     SyncAuditLog,
     CargoPrice,
     CargoCompany,
-    CargoRate,
+    DefaultCargoRate,
+    SellerCustomCargoRate,
     SellerCargoSettings,
-    CargoRateImportHistory,
+    CargoRateUpload,
     SubscriptionPlan,
     UserSubscription,
     Payment,
@@ -279,29 +280,38 @@ class CargoCompanyAdmin(admin.ModelAdmin):
     ordering = ("name",)
 
 
-@admin.register(CargoRate)
-class CargoRateAdmin(admin.ModelAdmin):
-    list_display = ("organization", "cargo_company", "desi_kg", "price", "is_active", "updated_at")
-    list_editable = ("price", "is_active")
-    list_filter = ("cargo_company", "organization", "is_active")
-    search_fields = ("organization__name", "cargo_company__name")
-    ordering = ("organization", "cargo_company", "desi_kg")
+@admin.register(DefaultCargoRate)
+class DefaultCargoRateAdmin(admin.ModelAdmin):
+    list_display = ("cargo_company", "desi", "price_vat_included", "is_active", "updated_at")
+    list_editable = ("price_vat_included", "is_active")
+    list_filter = ("cargo_company", "is_active")
+    search_fields = ("cargo_company__name",)
+    ordering = ("cargo_company", "desi")
+
+
+@admin.register(SellerCustomCargoRate)
+class SellerCustomCargoRateAdmin(admin.ModelAdmin):
+    list_display = ("organization", "desi", "price_vat_included", "source", "is_active", "updated_at")
+    list_editable = ("price_vat_included", "is_active")
+    list_filter = ("organization", "source", "is_active")
+    search_fields = ("organization__name",)
+    ordering = ("organization", "desi")
 
 
 @admin.register(SellerCargoSettings)
 class SellerCargoSettingsAdmin(admin.ModelAdmin):
-    list_display = ("organization", "default_cargo_company", "use_order_cargo_company", "apply_barem_0_199", "apply_barem_200_349")
-    list_filter = ("apply_barem_0_199", "apply_barem_200_349")
+    list_display = ("organization", "default_cargo_company", "use_custom_cargo_rates", "apply_barem_discount_0_199")
+    list_filter = ("apply_barem_discount_0_199", "apply_barem_discount_200_349", "use_custom_cargo_rates")
     search_fields = ("organization__name",)
 
 
-@admin.register(CargoRateImportHistory)
-class CargoRateImportHistoryAdmin(admin.ModelAdmin):
-    list_display = ("organization", "file_name", "imported_rows", "failed_rows", "status", "created_at")
+@admin.register(CargoRateUpload)
+class CargoRateUploadAdmin(admin.ModelAdmin):
+    list_display = ("organization", "file_name", "valid_row_count", "failed_row_count", "status", "uploaded_at")
     list_filter = ("status",)
     search_fields = ("organization__name", "file_name")
-    readonly_fields = ("error_message", "created_at")
-    ordering = ("-created_at",)
+    readonly_fields = ("error_message", "uploaded_at")
+    ordering = ("-uploaded_at",)
 
 
 # ===========================================================================

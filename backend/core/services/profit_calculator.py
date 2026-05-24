@@ -150,77 +150,47 @@ def get_cargo_cost_from_settings(organization, carrier_name: str, desi: int | No
     Yeni Kargo Ayarları modülünden kargo maliyetini belirler.
     
     Öncelik sırası:
-    1. Satıcıya özel CargoRate (organization bazlı)
-    2. Global CargoRate (organization=None)
-    3. Legacy fallback (CarrierFlatRate / hardcoded)
+    1. Satıcıya özel SellerCustomCargoRate (eğer use_custom_cargo_rates açıksa)
+    2. Global DefaultCargoRate (satıcının seçtiği default_cargo_company'ye göre)
+    3. Eksik (0.00 ve missing_cargo_rate)
     
     Returns: (cargo_cost_kdv_dahil, cargo_source)
     """
-    from core.models import CargoRate, CargoCompany, SellerCargoSettings
+    from core.models import SellerCustomCargoRate, DefaultCargoRate, SellerCargoSettings
 
     if desi is None or desi < 1:
-        desi = 1  # Minimum desi fallback
+        desi = 1
 
-    # ── Satıcı ayarlarını al ──
     try:
         seller_settings = SellerCargoSettings.objects.get(organization=organization)
     except SellerCargoSettings.DoesNotExist:
         seller_settings = None
 
-    # ── Kargo firmasını belirle ──
-    resolved_carrier = carrier_name
-    if seller_settings:
-        if carrier_name and seller_settings.use_order_cargo_company:
-            resolved_carrier = carrier_name
-        elif seller_settings.use_default_if_missing and seller_settings.default_cargo_company:
-            resolved_carrier = seller_settings.default_cargo_company.name
-        elif not carrier_name and seller_settings.default_cargo_company:
-            resolved_carrier = seller_settings.default_cargo_company.name
-
-    # ── Firma adını normalize et → CargoCompany eşleşmesi ──
-    normalized_carrier = _normalize_carrier(resolved_carrier) if resolved_carrier else ""
-
-    # ── CargoCompany bul ──
-    company = None
-    if normalized_carrier:
-        company = CargoCompany.objects.filter(
-            name__iexact=normalized_carrier, is_active=True
+    # 1. Satıcıya özel fiyat
+    if seller_settings and seller_settings.use_custom_cargo_rates:
+        rate = SellerCustomCargoRate.objects.filter(
+            organization=organization,
+            desi=desi,
+            is_active=True,
         ).first()
-        if not company:
-            # Fuzzy match — normalize'da dönebilecek varyantları dene
-            for cc in CargoCompany.objects.filter(is_active=True):
-                if _normalize_carrier(cc.name) == normalized_carrier:
-                    company = cc
-                    break
+        
+        if rate:
+            return rate.price_vat_included, "seller_custom_rate"
 
-    if not company:
-        # CargoCompany bulunamadı → legacy fallback
-        return _get_carrier_flat_rate(normalized_carrier or ""), "flat_estimated"
+    # 2. Global varsayılan fiyat (Satıcının varsayılan kargo firmasına göre)
+    if seller_settings and seller_settings.default_cargo_company:
+        default_rate = DefaultCargoRate.objects.filter(
+            cargo_company=seller_settings.default_cargo_company,
+            desi=desi,
+            is_active=True
+        ).first()
+        
+        if default_rate:
+            return default_rate.price_vat_included, "default_rate"
 
-    # ── 1. Satıcıya özel fiyat ──
-    rate = CargoRate.objects.filter(
-        organization=organization,
-        cargo_company=company,
-        desi_kg=desi,
-        is_active=True,
-    ).first()
-
-    if rate:
-        return rate.price, "seller_rate"
-
-    # ── 2. Global varsayılan fiyat ──
-    global_rate = CargoRate.objects.filter(
-        organization__isnull=True,
-        cargo_company=company,
-        desi_kg=desi,
-        is_active=True,
-    ).first()
-
-    if global_rate:
-        return global_rate.price, "default_rate"
-
-    # ── 3. Legacy fallback ──
-    return _get_carrier_flat_rate(normalized_carrier), "flat_estimated"
+    # 3. Hiçbir fiyat bulunamadı
+    logger.warning(f"Kargo fiyatı bulunamadı. Org: {organization.id}, Desi: {desi}")
+    return Decimal("0.00"), "missing_cargo_rate"
 
 
 class ProfitCalculator:
@@ -416,66 +386,94 @@ class ProfitCalculator:
                     extra_rate = DEFAULT_EXTRA_PRODUCT_COST_RATE
                 extra_product_cost = (product_cost * (extra_rate / Decimal("100"))).quantize(Decimal("0.01")) + extra_amount
                 product_cost += extra_product_cost
+
+        # ── Kargo ve Hizmet Bedeli Dağıtımı (Sipariş bazlı topla, oransal paylaştır) ──
+        from core.models import CargoInvoice, SellerCargoSettings
+        from django.db.models import Sum as DjSum
+        
+        items_in_order = list(order_item.order.items.select_related('product_variant__product').all())
+        total_sale = sum((it.sale_price_gross for it in items_in_order if it.status not in ["Returned", "Cancelled"]), Decimal("0.00"))
+        
+        if is_returned:
+            proportion = Decimal("0.00")
+        else:
+            proportion = (order_item.sale_price_gross / total_sale) if total_sale > Decimal("0.00") else Decimal("1")
             
-            # Aşama 1 (Tahmini Kargo): Fatura kesilmemişse (Transaction yoksa) desiden hesapla
-            if cargo_cost == Decimal("0.00"):
-                from core.models import CargoPricing
+        order_cargo = Decimal("0.00")
+        
+        invoice_total = CargoInvoice.objects.filter(
+            organization=order_item.order.organization,
+            order_number=order_num,
+            shipment_package_type="Gönderi Kargo Bedeli",
+        ).aggregate(total=DjSum("amount"))["total"]
+        if not invoice_total:
+            invoice_total = CargoInvoice.objects.filter(
+                organization=order_item.order.organization,
+                order_number=order_num,
+            ).aggregate(total=DjSum("amount"))["total"]
+            
+        if invoice_total and invoice_total > Decimal("0"):
+            order_cargo = invoice_total
+        else:
+            shipping_tx = FinancialTransaction.objects.filter(
+                order_item_ref__order=order_item.order,
+                transaction_type=FinancialTransactionType.SHIPPING_FEE.value
+            ).order_by('-occurred_at').first()
+            
+            if shipping_tx and shipping_tx.amount > Decimal("0"):
+                order_cargo = shipping_tx.amount
+            else:
+                total_desi = Decimal("0")
+                fast_delivery = bool(getattr(order_item.order, "fast_delivery", False))
+                raw_carrier = order_item.order.cargo_provider_name or ""
                 
-                # Desi önceliği: Varyantta yazan desi, yoksa Üründe yazan desi
-                active_desi = variant.desi if variant.desi is not None else product.desi
-                
-                # Siparişin kendi kargo firması varsa onu kullan, yoksa ürünün varsayılanını kullan
-                raw_carrier = order_item.order.cargo_provider_name if order_item.order.cargo_provider_name else product.default_carrier
-                
+                for it in items_in_order:
+                    if it.status in ["Returned", "Cancelled"]:
+                        continue
+                    if not raw_carrier and it.product_variant and it.product_variant.product:
+                        raw_carrier = it.product_variant.product.default_carrier or ""
+                        
+                    d = it.product_variant.desi if it.product_variant else None
+                    if d is None and it.product_variant and it.product_variant.product:
+                        d = it.product_variant.product.desi
+                    if d:
+                        total_desi += d * it.quantity
+                    if it.product_variant and it.product_variant.product and it.product_variant.product.fast_delivery:
+                        fast_delivery = True
+                        
                 carrier = _normalize_carrier(raw_carrier)
-                
-                # TRENDYOL BAREM DESTEK (26 Mart 2026) KONTROLÜ
-                # Barem destek tablosu 0-199 ve 200-349 aralıklarını kapsar.
-                # 350+ siparişler için 200-349 oranı tahmini olarak kullanılır.
                 barem_applied = False
-                if active_desi is not None and active_desi <= Decimal("10.00"):
-                    # Table seçimi
-                    target_table = "table1" if (order_item.order.fast_delivery or product.fast_delivery) else "table2"
-
-                    # Fiyat aralığı: 350+ için 200_349 oranı tahmini kullanılır
-                    price_range = "0_199" if sale_price_gross < Decimal("200.00") else "200_349"
-
-                    # Taşıyıcı kontrolü (Eğer tabloda yoksa barem destek uygulanmaz, normal fiyata düşer)
-                    if carrier in TRENDYOL_BAREM_RATES.get(target_table, {}).get(price_range, {}):
-                        barem_price_kdv_haric = TRENDYOL_BAREM_RATES[target_table][price_range][carrier]
-                        cargo_cost = barem_price_kdv_haric * Decimal("1.20")
+                try:
+                    seller_settings = SellerCargoSettings.objects.get(organization=order_item.order.organization)
+                    apply_barem_0_199 = seller_settings.apply_barem_discount_0_199
+                    apply_barem_200_349 = seller_settings.apply_barem_discount_200_349
+                except SellerCargoSettings.DoesNotExist:
+                    apply_barem_0_199 = True
+                    apply_barem_200_349 = True
+                
+                if total_desi > Decimal("0.00") and total_desi <= Decimal("10.00"):
+                    target_table = "table1" if fast_delivery else "table2"
+                    price_range = None
+                    if total_sale < Decimal("200.00") and apply_barem_0_199:
+                        price_range = "0_199"
+                    elif total_sale >= Decimal("200.00") and total_sale <= Decimal("349.99") and apply_barem_200_349:
+                        price_range = "200_349"
+                    if price_range and carrier in TRENDYOL_BAREM_RATES.get(target_table, {}).get(price_range, {}):
+                        order_cargo = TRENDYOL_BAREM_RATES[target_table][price_range][carrier] * Decimal("1.20")
                         barem_applied = True
-
-                # Barem desteğine uygun değilse veya taşıyıcı listede yoksa:
-                # Önce CargoPrice tablosuna bak (admin'den yönetilebilir), sonra eski tablolara düş
+                
                 if not barem_applied:
-                    cargo_price_found = False
-                    if active_desi is not None:
-                        try:
-                            desi_int = int(active_desi)
-                            price = _get_cargo_price_by_desi().get(desi_int)
-                            if price is not None:
-                                cargo_cost = price
-                                cargo_price_found = True
-                            else:
-                                logger.warning(
-                                    "[ProfitCalc] CargoPrice yok (desi=%s) "
-                                    "— fallback kargo tarifesine düşülüyor",
-                                    active_desi,
-                                )
-                        except Exception as e:
-                            logger.warning(
-                                "[ProfitCalc] CargoPrice okunamadı (desi=%s): %s "
-                                "— fallback kargo tarifesine düşülüyor",
-                                active_desi, e,
-                            )
-                    if not cargo_price_found:
-                        pricing = _get_cargo_pricing_cache().get((carrier, active_desi))
-                        if pricing:
-                            # KDV Hariç fiyat üzerine %20 ekleyerek Gross kargo bedeli
-                            cargo_cost = pricing.price_without_vat * Decimal("1.20")
-                        else:
-                            cargo_cost = _get_carrier_flat_rate(carrier)
+                    desi_int = int(total_desi) if total_desi > 0 else 1
+                    order_cargo, _ = get_cargo_cost_from_settings(order_item.order.organization, raw_carrier, desi_int)
+        
+        cargo_cost = (order_cargo * proportion).quantize(Decimal("0.01"))
+        
+        service_tx = FinancialTransaction.objects.filter(
+            order_item_ref__order=order_item.order,
+            transaction_type=FinancialTransactionType.SERVICE_FEE.value
+        ).first()
+        order_service_fee = service_tx.amount if (service_tx and service_tx.amount > Decimal("0")) else Decimal("13.19")
+        service_fee = (order_service_fee * proportion).quantize(Decimal("0.01"))
 
         result = ProfitCalculator.calculate_from_raw(
             sale_price_gross=sale_price_gross,
@@ -483,6 +481,7 @@ class ProfitCalculator:
             cargo_cost=cargo_cost,
             commission_rate=commission_rate,
             vat_rate=vat_rate,
+            service_fee=service_fee,
             is_micro_export=is_micro_export,
             sale_price_net=sale_price_net,
             is_returned=is_returned,
@@ -612,19 +611,19 @@ class ProfitCalculator:
                 from core.models import SellerCargoSettings
                 try:
                     seller_settings = SellerCargoSettings.objects.get(organization=order.organization)
-                    apply_barem_0_199 = seller_settings.apply_barem_0_199
-                    apply_barem_200_349 = seller_settings.apply_barem_200_349
+                    apply_barem_discount_0_199 = seller_settings.apply_barem_discount_0_199
+                    apply_barem_discount_200_349 = seller_settings.apply_barem_discount_200_349
                 except SellerCargoSettings.DoesNotExist:
-                    apply_barem_0_199 = True
-                    apply_barem_200_349 = True
+                    apply_barem_discount_0_199 = True
+                    apply_barem_discount_200_349 = True
 
                 if total_desi > Decimal("0.00") and total_desi <= Decimal("10.00"):
                     target_table = "table1" if fast_delivery else "table2"
                     
                     price_range = None
-                    if total_sale < Decimal("200.00") and apply_barem_0_199:
+                    if total_sale < Decimal("200.00") and apply_barem_discount_0_199:
                         price_range = "0_199"
-                    elif total_sale >= Decimal("200.00") and total_sale <= Decimal("349.99") and apply_barem_200_349:
+                    elif total_sale >= Decimal("200.00") and total_sale <= Decimal("349.99") and apply_barem_discount_200_349:
                         price_range = "200_349"
 
                     if price_range and carrier in TRENDYOL_BAREM_RATES.get(target_table, {}).get(price_range, {}):

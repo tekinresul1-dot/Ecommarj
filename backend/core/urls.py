@@ -21,8 +21,8 @@ from .sync_views import (
     TrendyolWebhookView, SyncStatusView,
 )
 from .cargo_views import (
-    CargoSettingsView, CargoCompanyListView, CargoRateView,
-    CargoBulkUpdateView, CargoRateImportView, CargoRateResetView,
+    CargoSettingsView, CargoCompanyListView, CustomCargoRateListView,
+    CustomCargoRateImportView, CustomCargoRateResetView, CargoTemplateDownloadView
 )
 
 urlpatterns = [
@@ -68,10 +68,10 @@ urlpatterns = [
     # Cargo Settings
     path("settings/cargo/", CargoSettingsView.as_view(), name="cargo-settings"),
     path("settings/cargo/companies/", CargoCompanyListView.as_view(), name="cargo-companies"),
-    path("settings/cargo/rates/", CargoRateView.as_view(), name="cargo-rates"),
-    path("settings/cargo/rates/bulk-update/", CargoBulkUpdateView.as_view(), name="cargo-bulk-update"),
-    path("settings/cargo/rates/import/", CargoRateImportView.as_view(), name="cargo-import"),
-    path("settings/cargo/rates/reset-defaults/", CargoRateResetView.as_view(), name="cargo-reset-defaults"),
+    path("settings/cargo/custom-rates/", CustomCargoRateListView.as_view(), name="cargo-custom-rates"),
+    path("settings/cargo/custom-rates/import/", CustomCargoRateImportView.as_view(), name="cargo-import"),
+    path("settings/cargo/custom-rates/reset/", CustomCargoRateResetView.as_view(), name="cargo-reset"),
+    path("settings/cargo/template/", CargoTemplateDownloadView.as_view(), name="cargo-template"),
 
     # Live Performance
     path("live-performance/", LivePerformanceView.as_view(), name="live-performance"),

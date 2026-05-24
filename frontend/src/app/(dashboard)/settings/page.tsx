@@ -157,11 +157,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto py-8 px-4 sm:px-6 lg:px-8 animate-in fade-in duration-500">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold tracking-tight text-white mb-2">Ayarlar & Entegrasyonlar</h1>
-        <p className="text-slate-400">Pazaryeri API bağlantılarınızı buradan güvenle yönetebilirsiniz.</p>
-      </div>
+    <div className="max-w-3xl animate-in fade-in duration-500">
 
       <Card className="bg-slate-900 border-slate-800/60 shadow-2xl overflow-hidden relative backdrop-blur-sm">
         <div className="absolute top-0 left-0 w-1.5 h-full bg-gradient-to-b from-orange-400 to-orange-600"></div>

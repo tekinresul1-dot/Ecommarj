@@ -31,7 +31,7 @@ echo -e "${GREEN}✅ GitHub push başarıyla tamamlandı!${NC}"
 echo ""
 
 # 3. Canlı Sunucuya SSH ile Bağlan ve Deploy Komutlarını Çalıştır
-SERVER="root@178.105.146.178"
+SERVER="ecommarj-hetzner"
 echo -e "${BLUE}[3/3] Canlı Sunucuya Bağlanılıyor (${SERVER}) ve Deploy Yapılıyor...${NC}"
 
 ssh -o StrictHostKeyChecking=no "$SERVER" << 'EOF'

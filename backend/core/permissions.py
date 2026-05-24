@@ -1,11 +1,9 @@
 """
 Custom DRF permissions for EcomMarj.
 
-`IsSubscribed` artık tam erişim kontrolü yapar (check_user_access üzerinden):
-is_active → is_suspended → 7+ gün gecikmiş ödeme → abonelik durumu. admin_override
-(profilde veya abonelikte) tüm engellemeleri geçer; superuser her zaman geçer.
-Tek bir noktadan tüm korumalı view'lara uygulanır — view tarafında değişiklik
-gerekmez.
+Abonelik/ödeme sistemi henüz canlı kullanıma açılmadığı için `IsSubscribed`
+şimdilik yalnızca oturum ve temel hesap durumunu kontrol eder. Ödeme sistemi
+aktif edildiğinde bu sınıf tekrar subscription servisine bağlanabilir.
 """
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
@@ -22,12 +20,10 @@ class IsSubscribed(BasePermission):
         user = getattr(request, "user", None)
         if not user or not user.is_authenticated:
             return False
-        if user.is_superuser or user.is_staff:
-            return True
-        # Lazy import — apps/migration sırasında circular import'u önler
-        from core.services.subscription_service import check_user_access
-        allowed, reason = check_user_access(user)
-        if not allowed:
-            # 403'te kullanıcıya açıklayıcı mesaj döndür
-            raise PermissionDenied(reason or "Erişim engellendi.")
+        if not user.is_active:
+            raise PermissionDenied("Hesabınız pasif durumda. Lütfen destek ile iletişime geçin.")
+        profile = getattr(user, "profile", None)
+        if profile and getattr(profile, "is_suspended", False):
+            reason = getattr(profile, "suspension_reason", "") or "Belirtilmedi"
+            raise PermissionDenied(f"Hesabınız askıya alındı. Sebep: {reason}")
         return True

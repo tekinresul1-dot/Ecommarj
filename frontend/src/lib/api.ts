@@ -77,12 +77,6 @@ async function tryRefreshToken(): Promise<string | null> {
     return _refreshPromise;
 }
 
-function handleSubscriptionRequired(): void {
-    if (typeof window !== "undefined" && window.location.pathname !== "/subscription") {
-        window.location.href = "/subscription";
-    }
-}
-
 function handleSessionExpired(): void {
     clearSession();
     if (typeof window !== "undefined" && window.location.pathname !== "/giris") {
@@ -150,15 +144,15 @@ export const api = {
             }
         }
 
-        if (res.status === 403) {
-            handleSubscriptionRequired();
-            throw new Error("Bu özelliğe erişmek için aktif bir abonelik gereklidir.");
-        }
-
         if (!res.ok) {
             const text = await res.text();
             console.error(`API Error on GET ${endpoint} (${res.status}): ${text.substring(0, 150)}`);
-            throw new Error(`API Hatası (${res.status}): ${res.statusText}`);
+            let message = `API Hatası (${res.status}): ${res.statusText}`;
+            try {
+                const errorData = JSON.parse(text);
+                message = parseErrorMsg(errorData, res.statusText, res.status);
+            } catch {}
+            throw new Error(message);
         }
 
         const text = await res.text();
@@ -187,11 +181,6 @@ export const api = {
                 handleSessionExpired();
                 throw new Error("Oturum süresi doldu. Lütfen tekrar giriş yapın.");
             }
-        }
-
-        if (res.status === 403) {
-            handleSubscriptionRequired();
-            throw new Error("Bu özelliğe erişmek için aktif bir abonelik gereklidir.");
         }
 
         if (!res.ok) {
@@ -239,11 +228,6 @@ export const api = {
             }
         }
 
-        if (res.status === 403) {
-            handleSubscriptionRequired();
-            throw new Error("Bu özelliğe erişmek için aktif bir abonelik gereklidir.");
-        }
-
         if (!res.ok) {
             let errorData = null;
             let errorText = "";
@@ -283,11 +267,6 @@ export const api = {
             }
         }
 
-        if (res.status === 403) {
-            handleSubscriptionRequired();
-            throw new Error("Bu özelliğe erişmek için aktif bir abonelik gereklidir.");
-        }
-
         if (!res.ok) {
             let errorData = null;
             let errorText = "";
@@ -323,11 +302,6 @@ export const api = {
                 handleSessionExpired();
                 throw new Error("Oturum süresi doldu. Lütfen tekrar giriş yapın.");
             }
-        }
-
-        if (res.status === 403) {
-            handleSubscriptionRequired();
-            throw new Error("Bu özelliğe erişmek için aktif bir abonelik gereklidir.");
         }
 
         if (!res.ok) {

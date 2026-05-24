@@ -106,14 +106,14 @@ class DashboardOverviewRevenueTests(TestCase):
 
         kpis = response.data["kpis"]
         debug = response.data["debug"]
-        self.assertEqual(Decimal(debug["gross_sales_total"]), Decimal("1359.00"))
+        self.assertEqual(Decimal(debug["gross_sales_total"]), Decimal("1419.00"))
         self.assertEqual(Decimal(debug["cancelled_total"]), Decimal("900.00"))
         self.assertEqual(Decimal(debug["returned_total"]), Decimal("0.00"))
-        self.assertEqual(Decimal(debug["discount_total"]), Decimal("159.00"))
-        self.assertEqual(Decimal(kpis["toplam_ciro"]), Decimal("300.00"))
-        self.assertEqual(Decimal(kpis["costed_revenue"]), Decimal("100.00"))
-        self.assertEqual(debug["included_items_count"], 2)
-        self.assertEqual(debug["excluded_by_status_count"], 2)
+        self.assertEqual(Decimal(debug["discount_total"]), Decimal("169.00"))
+        self.assertEqual(Decimal(kpis["toplam_ciro"]), Decimal("350.00"))
+        self.assertEqual(Decimal(kpis["costed_revenue"]), Decimal("150.00"))
+        self.assertEqual(debug["included_items_count"], 3)
+        self.assertEqual(debug["excluded_by_status_count"], 1)
         self.assertEqual(debug["excluded_by_missing_cost_count"], 1)
 
     def test_che_return_amount_is_subtracted_from_dashboard_revenue(self):
@@ -161,7 +161,7 @@ class DashboardOverviewRevenueTests(TestCase):
         self.assertEqual(Decimal(response.data["debug"]["gross_sales_total"]), Decimal("120.00"))
         self.assertEqual(Decimal(response.data["debug"]["discount_total"]), Decimal("20.00"))
 
-    def test_dashboard_date_filter_uses_last_modified_with_order_date_fallback(self):
+    def test_dashboard_date_filter_uses_order_date_for_sales_reporting(self):
         ist = ZoneInfo("Europe/Istanbul")
         outside_order_date = datetime(2026, 4, 10, 12, 0, tzinfo=ist)
         inside_operation_date = datetime(2026, 5, 5, 12, 0, tzinfo=ist)
@@ -191,8 +191,8 @@ class DashboardOverviewRevenueTests(TestCase):
         response = self._get_dashboard()
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(Decimal(response.data["kpis"]["toplam_ciro"]), Decimal("100.00"))
+        self.assertEqual(Decimal(response.data["kpis"]["toplam_ciro"]), Decimal("200.00"))
         self.assertEqual(
             response.data["debug"]["date_filter_field"],
-            "last_modified_date_with_order_date_fallback",
+            "order_date",
         )

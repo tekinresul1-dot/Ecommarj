@@ -30,19 +30,34 @@ logger = logging.getLogger(__name__)
 
 # Trendyol status -> EcomMarj status mapping
 STATUS_MAP = {
+    "Awaiting": Order.Status.AWAITING,
     "Created": Order.Status.CREATED,
     "Picking": Order.Status.PICKING,
+    "Invoiced": Order.Status.INVOICED,
     "Shipped": Order.Status.SHIPPED,
+    "AtCollectionPoint": Order.Status.AT_COLLECTION_POINT,
     "Delivered": Order.Status.DELIVERED,
     "Cancelled": Order.Status.CANCELLED,
     "Returned": Order.Status.RETURNED,
     "UnDelivered": Order.Status.UNDELIVERED,
     "UnSupplied": Order.Status.UNSUPPLIED,
+    "UnPacked": Order.Status.UNPACKED,
+    "Repack": Order.Status.REPACK,
 }
 
 # Default total_days for full sync
 # 180 days keeps enough history while minimizing API call volume per sync
 FULL_SYNC_DAYS = 180
+
+
+def _decimal_from_payload(payload: Dict[str, Any], key: str) -> Decimal:
+    value = payload.get(key)
+    if value in (None, ""):
+        return Decimal("0.00")
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return Decimal("0.00")
 
 
 class TrendyolOrderSyncService:
@@ -257,6 +272,11 @@ class TrendyolOrderSyncService:
             for opt in (line.get("fastDeliveryOptions") or [])
             if isinstance(opt, dict)
         )
+        created_by = str(o_data.get("createdBy") or "")
+        package_gross_amount = _decimal_from_payload(o_data, "packageGrossAmount")
+        package_seller_discount = _decimal_from_payload(o_data, "packageSellerDiscount")
+        package_ty_discount = _decimal_from_payload(o_data, "packageTyDiscount")
+        package_total_discount = _decimal_from_payload(o_data, "packageTotalDiscount")
         
         # Country code
         country_code = "TR"
@@ -287,9 +307,18 @@ class TrendyolOrderSyncService:
             # Change detection — skip if hash is identical
             if existing.raw_payload_hash == payload_hash:
                 changed_fields = []
-                if getattr(existing, "fast_delivery", False) != is_fast_delivery:
-                    existing.fast_delivery = is_fast_delivery
-                    changed_fields.append("fast_delivery")
+                for field_name, value in {
+                    "fast_delivery": is_fast_delivery,
+                    "created_by": created_by,
+                    "package_gross_amount": package_gross_amount,
+                    "package_seller_discount": package_seller_discount,
+                    "package_ty_discount": package_ty_discount,
+                    "package_total_discount": package_total_discount,
+                    "raw_payload": o_data,
+                }.items():
+                    if getattr(existing, field_name) != value:
+                        setattr(existing, field_name, value)
+                        changed_fields.append(field_name)
                 if changed_fields:
                     existing.last_synced_at = timezone.now()
                     changed_fields.append("last_synced_at")
@@ -317,6 +346,12 @@ class TrendyolOrderSyncService:
             existing.cargo_provider_name = cargo_provider
             existing.cargo_tracking_number = cargo_tracking
             existing.fast_delivery = is_fast_delivery
+            existing.created_by = created_by
+            existing.package_gross_amount = package_gross_amount
+            existing.package_seller_discount = package_seller_discount
+            existing.package_ty_discount = package_ty_discount
+            existing.package_total_discount = package_total_discount
+            existing.raw_payload = o_data
             existing.raw_payload_hash = payload_hash
             existing.last_synced_at = timezone.now()
             existing.save()
@@ -339,6 +374,12 @@ class TrendyolOrderSyncService:
                 cargo_provider_name=cargo_provider,
                 cargo_tracking_number=cargo_tracking,
                 fast_delivery=is_fast_delivery,
+                created_by=created_by,
+                package_gross_amount=package_gross_amount,
+                package_seller_discount=package_seller_discount,
+                package_ty_discount=package_ty_discount,
+                package_total_discount=package_total_discount,
+                raw_payload=o_data,
                 raw_payload_hash=payload_hash,
                 last_synced_at=timezone.now(),
             )
@@ -353,7 +394,7 @@ class TrendyolOrderSyncService:
         
         for line in o_data.get("lines", []):
             barcode = line.get("barcode", "")
-            line_id = str(line.get("id", ""))
+            line_id = str(line.get("lineId") or line.get("id") or "")
             
             if not line_id:
                 continue
@@ -376,7 +417,7 @@ class TrendyolOrderSyncService:
 
             defaults = {
                 "product_variant": variant,
-                "sku": line.get("merchantSku", barcode),
+                "sku": line.get("merchantSku") or line.get("stockCode") or barcode,
                 "quantity": quantity,
                 "sale_price_gross": amounts["gross"],
                 "sale_price_net": amounts["net"],

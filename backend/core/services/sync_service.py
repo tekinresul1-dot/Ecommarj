@@ -13,15 +13,31 @@ from core.utils.encryption import decrypt_value
 
 logger = logging.getLogger(__name__)
 
+
+def _decimal_from_payload(payload, key):
+    value = payload.get(key)
+    if value in (None, ""):
+        return Decimal("0.00")
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return Decimal("0.00")
+
 # Trendyol status -> EcomMarj status mapping
 STATUS_MAP = {
+    "Awaiting": Order.Status.AWAITING,
     "Created": Order.Status.CREATED,
     "Picking": Order.Status.PICKING,
+    "Invoiced": Order.Status.INVOICED,
     "Shipped": Order.Status.SHIPPED,
+    "AtCollectionPoint": Order.Status.AT_COLLECTION_POINT,
     "Delivered": Order.Status.DELIVERED,
     "Cancelled": Order.Status.CANCELLED,
     "Returned": Order.Status.RETURNED,
-    "UnSupplied": Order.Status.CANCELLED,
+    "UnDelivered": Order.Status.UNDELIVERED,
+    "UnSupplied": Order.Status.UNSUPPLIED,
+    "UnPacked": Order.Status.UNPACKED,
+    "Repack": Order.Status.REPACK,
 }
 
 
@@ -225,6 +241,7 @@ class TrendyolSyncService:
                 for opt in (line.get("fastDeliveryOptions") or [])
                 if isinstance(opt, dict)
             )
+            created_by = str(o_data.get("createdBy") or "")
             
             # Cargo details
             cargo_provider = o_data.get("cargoProviderName", "")
@@ -272,13 +289,19 @@ class TrendyolSyncService:
                     "cargo_tracking_number": cargo_tracking,
                     "cargo_deci": cargo_deci,
                     "fast_delivery": is_fast_delivery,
+                    "created_by": created_by,
+                    "package_gross_amount": _decimal_from_payload(o_data, "packageGrossAmount"),
+                    "package_seller_discount": _decimal_from_payload(o_data, "packageSellerDiscount"),
+                    "package_ty_discount": _decimal_from_payload(o_data, "packageTyDiscount"),
+                    "package_total_discount": _decimal_from_payload(o_data, "packageTotalDiscount"),
+                    "raw_payload": o_data,
                 }
             )
 
             # Sipariş satırları
             for line in o_data.get("lines", []):
                 barcode = line.get("barcode", "")
-                line_id = str(line.get("id", ""))
+                line_id = str(line.get("lineId") or line.get("id") or "")
                 
                 # Find matching variant by barcode
                 variant = None
@@ -297,7 +320,7 @@ class TrendyolSyncService:
                 
                 item_defaults = {
                     "product_variant": variant,
-                    "sku": line.get("merchantSku", barcode),
+                    "sku": line.get("merchantSku") or line.get("stockCode") or barcode,
                     "quantity": quantity,
                     "sale_price_gross": amounts["gross"],
                     "sale_price_net": amounts["net"],

@@ -6,7 +6,7 @@ const getApiBase = () => {
         // Using relative path ensures it works on whatever port/domain the user is on.
         return "/api";
     }
-    let base = process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+    const base = process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
     return base.replace(/\/$/, "");
 };
 
@@ -26,7 +26,11 @@ const getHeaders = (endpoint?: string): Record<string, string> => {
     const isPublicAuthEndpoint = endpoint && (
         endpoint.includes('/auth/login') ||
         endpoint.includes('/auth/register') ||
-        endpoint.includes('/auth/token/refresh')
+        endpoint.includes('/auth/token/refresh') ||
+        endpoint.includes('/auth/google') ||
+        endpoint.includes('/auth/send-otp') ||
+        endpoint.includes('/auth/verify-otp') ||
+        endpoint.includes('/auth/access-code')
     );
     return {
         "Content-Type": "application/json",

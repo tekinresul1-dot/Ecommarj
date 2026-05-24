@@ -29,8 +29,8 @@ export default function LoginPage() {
     const [toastType, setToastType] = useState<"success" | "error">("success");
 
     useEffect(() => {
-        const token = localStorage.getItem("access_token");
-        if (token) router.replace("/dashboard");
+        // Removed localStorage auto-redirect. Middleware handles session validity.
+        // Stale localStorage tokens caused redirect loops back to /giris.
     }, [router]);
 
     function showToast(msg: string, type: "success" | "error" = "success") {
@@ -377,7 +377,7 @@ export default function LoginPage() {
                         <div className="h-px flex-1 bg-white/10" />
                     </div>
 
-                    <Link
+                    <a
                         href="/google-giris"
                         className="w-full h-12 rounded-xl border border-white/10 bg-white/5 hover:bg-white/7 hover:border-white/20 text-white font-medium transition-all flex items-center justify-center gap-3"
                     >
@@ -385,7 +385,7 @@ export default function LoginPage() {
                             G
                         </span>
                         Google ile Devam Et
-                    </Link>
+                    </a>
                 </div>
 
                 <p className="mt-6 text-center text-sm text-white/50">

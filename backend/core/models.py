@@ -210,12 +210,17 @@ class Order(TimestampedModel):
     class Status(models.TextChoices):
         CREATED = "Created", "Oluşturuldu"
         PICKING = "Picking", "Hazırlanıyor"
+        INVOICED = "Invoiced", "Faturalandı"
         SHIPPED = "Shipped", "Kargoya Verildi"
+        AT_COLLECTION_POINT = "AtCollectionPoint", "Teslimat Noktasında"
         DELIVERED = "Delivered", "Teslim Edildi"
         CANCELLED = "Cancelled", "İptal"
         RETURNED = "Returned", "İade"
         UNDELIVERED = "UnDelivered", "Teslim Edilemedi"
         UNSUPPLIED = "UnSupplied", "Tedarik Edilemedi"
+        UNPACKED = "UnPacked", "Paket Bölündü"
+        REPACK = "Repack", "Tekrar Paketlendi"
+        AWAITING = "Awaiting", "Ödeme Bekliyor"
         
     class Channel(models.TextChoices):
         TRENDYOL = "trendyol", "Trendyol"
@@ -240,9 +245,18 @@ class Order(TimestampedModel):
     cargo_deci = models.DecimalField("Kargo Desi (Trendyol'dan)", max_digits=8, decimal_places=2, null=True, blank=True)
     cargo_cost = models.DecimalField("Kargo Maliyeti (Hesaplanan)", max_digits=10, decimal_places=2, null=True, blank=True)
     fast_delivery = models.BooleanField("Hızlı Teslimat / Bugün Kargoda", default=False)
+    created_by = models.CharField("Paket Oluşum Tipi", max_length=50, blank=True, default="")
+
+    # Trendyol package amount snapshot fields. These are package-level source
+    # numbers from getShipmentPackages and help reconcile with Sales & Operation.
+    package_gross_amount = models.DecimalField("Paket Brüt Tutar", max_digits=12, decimal_places=2, default=0)
+    package_seller_discount = models.DecimalField("Paket Satıcı İndirimi", max_digits=12, decimal_places=2, default=0)
+    package_ty_discount = models.DecimalField("Paket Trendyol İndirimi", max_digits=12, decimal_places=2, default=0)
+    package_total_discount = models.DecimalField("Paket Toplam İndirim", max_digits=12, decimal_places=2, default=0)
     
     # Sync metadata
     raw_payload_hash = models.CharField("Payload Hash", max_length=64, blank=True, default="")
+    raw_payload = models.JSONField("Ham Trendyol Paket Verisi", default=dict, blank=True)
     last_synced_at = models.DateTimeField("Son Sync Zamanı", null=True, blank=True)
 
     class Meta:

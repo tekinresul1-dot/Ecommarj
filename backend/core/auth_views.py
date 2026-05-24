@@ -83,6 +83,7 @@ class RegisterView(APIView):
     """POST /api/auth/register/ — yeni hesap oluştur."""
 
     permission_classes = [AllowAny]
+    authentication_classes = []
     throttle_classes = [OTPRateThrottle]
 
     def post(self, request):
@@ -162,6 +163,7 @@ class RegisterView(APIView):
 class RegisterVerifyView(APIView):
     """POST /api/auth/register/verify/ — yeni kaydı doğrula ve login ol."""
     permission_classes = [AllowAny]
+    authentication_classes = []
     throttle_classes = [OTPRateThrottle]
 
     def post(self, request):
@@ -217,6 +219,7 @@ class RegisterVerifyView(APIView):
 class RegisterResendOTPView(APIView):
     """POST /api/auth/register/resend-otp/ — doğrulama kodunu tekrar gönder."""
     permission_classes = [AllowAny]
+    authentication_classes = []
     throttle_classes = [OTPRateThrottle]
 
     def post(self, request):
@@ -301,6 +304,7 @@ class LoginView(APIView):
     """POST /api/auth/login/ — giriş yap."""
 
     permission_classes = [AllowAny]
+    authentication_classes = []
     throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
@@ -368,6 +372,7 @@ class AccessCodeLoginView(APIView):
     OTP zorunluluğu yok; ancak `validate_code` 5 yanlışta IP başına 15dk kilit
     uygular ve hesap askıdaysa giriş yine reddedilir."""
     permission_classes = [AllowAny]
+    authentication_classes = []
     throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
@@ -414,6 +419,7 @@ class GoogleLoginView(APIView):
     """POST /api/auth/google/ — Google ile giriş yap."""
 
     permission_classes = [AllowAny]
+    authentication_classes = []
     throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
@@ -566,6 +572,7 @@ class SendOTPView(APIView):
     """POST /api/auth/send-otp/ — giriş için e-postaya kod gönder."""
 
     permission_classes = [AllowAny]
+    authentication_classes = []
     throttle_classes = [OTPRateThrottle]
 
     # Account-existence is never revealed: the response is identical whether
@@ -649,6 +656,7 @@ class VerifyOTPView(APIView):
     """POST /api/auth/verify-otp/ — kodu doğrula ve giriş yap."""
 
     permission_classes = [AllowAny]
+    authentication_classes = []
     throttle_classes = [OTPRateThrottle]
 
     def post(self, request):

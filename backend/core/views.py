@@ -28,19 +28,17 @@ MONTHS_TR = {
 # ---------------------------------------------------------------------------
 # Sipariş statüsü sabitleri — tüm view'larda tutarlı kullanım için
 # ---------------------------------------------------------------------------
-# Satış olarak sayılan: sadece teslim onaylanmış siparişler
-# Shipped (kargoda) henüz teslim kesinleşmedi → Trendyol da saymıyor
-SALE_STATUSES = ["Delivered"]
-# Dashboard "Toplam Ciro" Trendyol Satış & Operasyon mantığına yakın çalışır:
-# teslim edilmiş ve kargoya verilmiş satışlar net satış havuzunda kalır.
-# Picking/Created henüz satışa dönüşmediği için Trendyol net satış gibi dışarıda tutulur.
-DASHBOARD_REVENUE_STATUSES = ["Delivered", "Shipped"]
+# Satış olarak sayılan statüler. Trendyol Satış & Operasyon brüt/net ekranı
+# sipariş tarihi içindeki pozitif satışları sayar; sadece teslim edilmiş
+# siparişlerle sınırlamak ciroyu eksik gösterir.
+SALE_STATUSES = ["Created", "Picking", "Invoiced", "Shipped", "AtCollectionPoint", "Delivered"]
+DASHBOARD_REVENUE_STATUSES = SALE_STATUSES
 # Kargo hareketi olan iade/teslim edilemedi — kargo zararı oluşur
 RETURN_STATUSES = ["Returned", "UnDelivered"]
 # Sevkiyat yapılmamış iptal/tedarik edilemedi — kargo zararı yok
 CANCEL_STATUSES = ["Cancelled", "UnSupplied"]
-# Trendyol Satış & Operasyon'daki "Brüt Satış" satışa konu olmuş,
-# sonradan iptal/iade ile netten düşülebilen statülerden oluşur.
+# Trendyol Satış & Operasyon'daki "Brüt Satış" pozitif satışlar ile
+# sonradan iptal/iade olarak netten düşülebilen statülerden oluşur.
 GROSS_SALES_STATUSES = DASHBOARD_REVENUE_STATUSES + RETURN_STATUSES + CANCEL_STATUSES
 # Satış sayılmayan tüm statüler
 NON_SALE_STATUSES = RETURN_STATUSES + CANCEL_STATUSES
@@ -199,7 +197,7 @@ class DashboardOverviewView(APIView):
     Filtrelere göre Sipariş, Ürün ve Finansal verileri toplayıp gerçek KPI döndürür.
     
     Toplam Ciro = Trendyol Satış & Operasyon mantığına yakın net satış havuzu
-    (iptal/iade dışı operasyonel statüler, paket son güncelleme tarihi bazlı)
+    (order_date bazlı satış tarihi; sync tarafı PackageLastModifiedDate ile veri yakalar)
     Maliyetlendirilen Ciro = Sadece maliyeti tanımlı ürünlerin cirosu
     Kâr Tutarı = Maliyetlendirilen ciro üzerinden ProfitCalculator ile hesaplanan kâr
     """
@@ -224,8 +222,15 @@ class DashboardOverviewView(APIView):
         min_date_str = request.query_params.get("min_date")
         max_date_str = request.query_params.get("max_date")
 
-        # Redis cache key — kullanıcı+filtre kombinasyonuna özel
-        cache_key = f"dashboard_overview:{org.id}:{channel}:{countries}:{min_date_str}:{max_date_str}"
+        account_for_cache = MarketplaceAccount.objects.filter(organization=org, is_active=True).first()
+
+        # Redis cache key — kullanıcı+satıcı+filtre kombinasyonuna özel
+        cache_key = (
+            f"dashboard_overview:v2:{org.id}:{user.id}:"
+            f"{getattr(account_for_cache, 'seller_id', '')}:"
+            f"{getattr(account_for_cache, 'last_sync_at', '')}:"
+            f"{channel}:{countries}:{min_date_str}:{max_date_str}"
+        )
         cached_response = cache.get(cache_key)
         if cached_response is not None:
             return Response(cached_response)
@@ -280,10 +285,22 @@ class DashboardOverviewView(APIView):
         ).values("product").distinct().count()
         _products_without_cost = _total_org_products - _products_with_cost
 
-        gross_orders_qs = orders_qs.filter(status__in=GROSS_SALES_STATUSES)
-        all_items_in_range_qs = OrderItem.objects.filter(order__in=gross_orders_qs)
-        excluded_by_status_qs = OrderItem.objects.filter(order__in=orders_qs).exclude(order__status__in=GROSS_SALES_STATUSES)
-        active_items_all_qs = OrderItem.objects.filter(order__in=active_orders_qs)
+        all_order_items_qs = OrderItem.objects.filter(order__in=orders_qs)
+        gross_status_q = django_models.Q(status__in=GROSS_SALES_STATUSES) | django_models.Q(
+            status="", order__status__in=GROSS_SALES_STATUSES
+        )
+        active_status_q = django_models.Q(status__in=DASHBOARD_REVENUE_STATUSES) | django_models.Q(
+            status="", order__status__in=DASHBOARD_REVENUE_STATUSES
+        )
+        cancel_status_q = django_models.Q(status__in=CANCEL_STATUSES) | django_models.Q(
+            status="", order__status__in=CANCEL_STATUSES
+        )
+        return_status_q = django_models.Q(status__in=RETURN_STATUSES) | django_models.Q(
+            status="", order__status__in=RETURN_STATUSES
+        )
+        all_items_in_range_qs = all_order_items_qs.filter(gross_status_q)
+        excluded_by_status_qs = all_order_items_qs.exclude(gross_status_q)
+        active_items_all_qs = all_order_items_qs.filter(active_status_q)
 
         revenue_agg = active_items_all_qs.aggregate(
             total_gross=django_models.Sum("sale_price_gross"),
@@ -299,12 +316,17 @@ class DashboardOverviewView(APIView):
             discount=django_models.Sum("discount"),
             qty=django_models.Sum("quantity"),
         )
-        cancelled_agg = all_items_in_range_qs.filter(order__status__in=CANCEL_STATUSES).aggregate(
-            total=django_models.Sum("sale_price_gross"),  # gross: Trendyol brüt satış havuzuyla tutarlı
+        package_discount_agg = orders_qs.filter(status__in=GROSS_SALES_STATUSES).aggregate(
+            package_discount=django_models.Sum("package_total_discount"),
+            seller_discount=django_models.Sum("package_seller_discount"),
+            ty_discount=django_models.Sum("package_ty_discount"),
+        )
+        cancelled_agg = all_items_in_range_qs.filter(cancel_status_q).aggregate(
+            total=django_models.Sum("sale_price_net"),
             qty=django_models.Sum("quantity"),
         )
-        returned_status_agg = all_items_in_range_qs.filter(order__status__in=RETURN_STATUSES).aggregate(
-            total=django_models.Sum("sale_price_gross"),  # gross: Trendyol brüt satış havuzuyla tutarlı
+        returned_status_agg = all_items_in_range_qs.filter(return_status_q).aggregate(
+            total=django_models.Sum("sale_price_net"),
             qty=django_models.Sum("quantity"),
         )
 
@@ -325,7 +347,9 @@ class DashboardOverviewView(APIView):
             ).aggregate(total=django_models.Sum("debt"))["total"] or Decimal("0.00")
 
         total_gross = gross_all_agg["gross"] or Decimal("0.00")
-        total_discount = gross_all_agg["discount"] or Decimal("0.00")
+        line_discount_total = gross_all_agg["discount"] or Decimal("0.00")
+        package_discount_total = package_discount_agg["package_discount"] or Decimal("0.00")
+        total_discount = package_discount_total if package_discount_total > Decimal("0.00") else line_discount_total
         cancelled_total = cancelled_agg["total"] or Decimal("0.00")
         returned_status_total = returned_status_agg["total"] or Decimal("0.00")
         # CHE iade tutarı: sadece status-based tutardan büyükse kullan
@@ -593,10 +617,7 @@ class DashboardOverviewView(APIView):
             )
             if countries:
                 all_channel_orders_qs = all_channel_orders_qs.filter(country_code__in=country_list)
-            date_excluded_orders = all_channel_orders_qs.exclude(
-                django_models.Q(last_modified_date__gte=min_date, last_modified_date__lte=max_date) |
-                django_models.Q(last_modified_date__isnull=True, order_date__gte=min_date, order_date__lte=max_date)
-            ).count()
+            date_excluded_orders = all_channel_orders_qs.exclude(order_date__gte=min_date, order_date__lte=max_date).count()
 
         debug_payload = {
             "seller_id": str(getattr(MarketplaceAccount.objects.filter(organization=org, is_active=True).first(), "seller_id", "")),
@@ -618,7 +639,12 @@ class DashboardOverviewView(APIView):
             "returned_total": str(returned_total),
             "returned_status_total": str(returned_status_total),
             "returned_che_total": str(che_returned_total),
-            "discount_total": str(gross_all_agg["discount"] or Decimal("0.00")),
+            "seller_discount_total": str(package_discount_agg["seller_discount"] or Decimal("0.00")),
+            "ty_discount_total": str(package_discount_agg["ty_discount"] or Decimal("0.00")),
+            "package_total_discount": str(package_discount_total),
+            "line_discount_total": str(line_discount_total),
+            "discount_total": str(total_discount),
+            "final_discount_source": "package_total_discount" if package_discount_total > Decimal("0.00") else "line_discount_total",
             "net_sales_formula": "gross_sales_total - cancelled_total - returned_total - discount_total",
             "net_sales_total": str(toplam_ciro),
             "costed_sales_total": str(total_costed_revenue),

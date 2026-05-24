@@ -152,6 +152,21 @@ class OrderSyncIdempotencyTests(TestCase):
         item = order.items.first()
         self.assertEqual(item.sale_price_gross, Decimal("200.00"))
 
+    def test_order_sync_accepts_trendyol_line_id_field(self):
+        """Official getShipmentPackages uses lineId, not only id."""
+        order_data = self._make_order_data()
+        order_data["lines"][0].pop("id")
+        order_data["lines"][0]["lineId"] = "LINE-FROM-DOCS"
+
+        with patch("core.services.order_sync.TrendyolApiClient"):
+            from core.services.order_sync import TrendyolOrderSyncService
+            service = TrendyolOrderSyncService(self.account)
+            service.client = MagicMock()
+            service.client.fetch_orders.return_value = [order_data]
+            service.full_sync(days=30)
+
+        self.assertTrue(OrderItem.objects.filter(marketplace_line_id="LINE-FROM-DOCS").exists())
+
 
 class PayloadHashTests(TestCase):
     """Test compute_payload_hash determinism."""
@@ -190,3 +205,29 @@ class OrderAmountParsingTests(TestCase):
         self.assertEqual(amounts["gross"], Decimal("120.00"))
         self.assertEqual(amounts["discount"], Decimal("20.00"))
         self.assertEqual(amounts["net"], Decimal("100.00"))
+
+    def test_trendyol_line_gross_and_line_total_discount_are_quantity_aware(self):
+        amounts = parse_order_line_amounts({
+            "quantity": 2,
+            "lineGrossAmount": "100.00",
+            "lineTotalDiscount": "15.00",
+        })
+
+        self.assertEqual(amounts["gross"], Decimal("200.00"))
+        self.assertEqual(amounts["discount"], Decimal("30.00"))
+        self.assertEqual(amounts["net"], Decimal("170.00"))
+
+    def test_trendyol_discount_details_are_used_when_available(self):
+        amounts = parse_order_line_amounts({
+            "quantity": 2,
+            "lineGrossAmount": "100.00",
+            "lineTotalDiscount": "15.00",
+            "discountDetails": [
+                {"lineItemPrice": "90.00", "lineItemSellerDiscount": "7.00", "lineItemTyDiscount": "3.00"},
+                {"lineItemPrice": "80.00", "lineItemSellerDiscount": "12.00", "lineItemTyDiscount": "8.00"},
+            ],
+        })
+
+        self.assertEqual(amounts["gross"], Decimal("200.00"))
+        self.assertEqual(amounts["discount"], Decimal("30.00"))
+        self.assertEqual(amounts["net"], Decimal("170.00"))

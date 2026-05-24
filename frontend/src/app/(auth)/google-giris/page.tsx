@@ -47,7 +47,6 @@ type GoogleWindow = Window & {
 export default function GoogleLoginPage() {
     const router = useRouter();
     const buttonRef = useRef<HTMLDivElement | null>(null);
-    const initializedRef = useRef(false);
 
     const [scriptReady, setScriptReady] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
@@ -62,9 +61,12 @@ export default function GoogleLoginPage() {
     }
 
     useEffect(() => {
-        const token = localStorage.getItem("access_token");
-        if (token) {
-            router.replace("/dashboard");
+        // Removed localStorage auto-redirect. Middleware handles session validity.
+        // Stale localStorage tokens caused redirect loops.
+
+        // If script is already loaded from previous navigation
+        if (typeof window !== "undefined" && (window as GoogleWindow).google?.accounts?.id) {
+            setScriptReady(true);
         }
     }, [router]);
 
@@ -74,40 +76,43 @@ export default function GoogleLoginPage() {
             return;
         }
 
-        const googleWindow = window as GoogleWindow;
+        const googleWindow = window as GoogleWindow & { googleInitialized?: boolean };
         const googleApi = googleWindow.google;
-        if (!scriptReady || !buttonRef.current || initializedRef.current || !googleApi?.accounts?.id) {
+        if (!scriptReady || !buttonRef.current || !googleApi?.accounts?.id) {
             return;
         }
 
-        googleApi.accounts.id.initialize({
-            client_id: GOOGLE_CLIENT_ID,
-            callback: async (response: GoogleCredentialResponse) => {
-                if (!response?.credential) {
-                    showToast("Google doğrulaması alınamadı. Lütfen tekrar deneyin.", "error");
-                    return;
-                }
+        if (!googleWindow.googleInitialized) {
+            googleApi.accounts.id.initialize({
+                client_id: GOOGLE_CLIENT_ID,
+                callback: async (response: GoogleCredentialResponse) => {
+                    if (!response?.credential) {
+                        showToast("Google doğrulaması alınamadı. Lütfen tekrar deneyin.", "error");
+                        return;
+                    }
 
-                setIsLoading(true);
-                setError("");
+                    setIsLoading(true);
+                    setError("");
 
-                try {
-                    const data = await api.post("/auth/google/", { id_token: response.credential });
-                    setSession(data.tokens.access, data.tokens.refresh, data.user);
-                    showToast("Google ile giriş başarılı. Yönlendiriliyorsunuz...", "success");
-                    setTimeout(() => window.location.assign("/dashboard"), 600);
-                } catch (err: unknown) {
-                    const message = err instanceof Error ? err.message : "Google ile giriş sırasında bir hata oluştu.";
-                    setError(message);
-                    showToast(message, "error");
-                } finally {
-                    setIsLoading(false);
-                }
-            },
-            ux_mode: "popup",
-            auto_select: false,
-            cancel_on_tap_outside: true,
-        });
+                    try {
+                        const data = await api.post("/auth/google/", { id_token: response.credential });
+                        setSession(data.tokens.access, data.tokens.refresh, data.user);
+                        showToast("Google ile giriş başarılı. Yönlendiriliyorsunuz...", "success");
+                        setTimeout(() => window.location.assign("/dashboard"), 600);
+                    } catch (err: unknown) {
+                        const message = err instanceof Error ? err.message : "Google ile giriş sırasında bir hata oluştu.";
+                        setError(message);
+                        showToast(message, "error");
+                    } finally {
+                        setIsLoading(false);
+                    }
+                },
+                ux_mode: "popup",
+                auto_select: false,
+                cancel_on_tap_outside: true,
+            });
+            googleWindow.googleInitialized = true;
+        }
 
         buttonRef.current.innerHTML = "";
         googleApi.accounts.id.renderButton(buttonRef.current, {
@@ -118,8 +123,6 @@ export default function GoogleLoginPage() {
             shape: "pill",
             logo_alignment: "left",
         });
-
-        initializedRef.current = true;
     }, [router, scriptReady]);
 
     return (
@@ -195,12 +198,12 @@ export default function GoogleLoginPage() {
                     </div>
 
                     <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                        <Link
+                        <a
                             href="/giris"
                             className="h-11 rounded-xl border border-white/10 bg-white/5 hover:bg-white/8 text-white/80 hover:text-white transition-all flex items-center justify-center"
                         >
                             Diğer Giriş Yöntemleri
-                        </Link>
+                        </a>
                         <Link
                             href="/ucretsiz-basla"
                             className="h-11 rounded-xl bg-gradient-to-r from-accent-500 to-electric-500 hover:from-accent-400 hover:to-electric-400 text-white font-semibold transition-all flex items-center justify-center"
